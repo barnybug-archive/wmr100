@@ -1,0 +1,9 @@
+Add group 'weather':
+# addgroup weather
+# addgroup <user> weather
+
+Copy wmr100.rules into /etc/udev and symlink:
+# cp wmr100.rules /etc/udev
+# cd etc/udev/rules.d; ln -s ../wmr100.rules 025_wmr100.rules
+
+Run wmr100.

@@ -1,0 +1,7 @@
+# udev rule to create nodes with correct membership and permissions for
+# all PTP cameras; must be run before udev.rules
+#
+
+ACTION=="add", SUBSYSTEM=="usb_device", ATTRS{idProduct}=="ca01", ATTRS{idVendor}=="0fde", \
+  PROGRAM="/bin/sh -c 'K=%k; K=$${K#usbdev}; printf bus/usb/%%03i/%%03i $${K%%%%.*} $${K#*.}'", \
+  NAME="%c", MODE="0660", GROUP="weather"
