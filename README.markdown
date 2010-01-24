@@ -20,7 +20,8 @@ ports.
 Requisites
 ----------
 
-libhid-dev (or similarly named) packages installed.
+libhid-dev (or similarly named) package installed.
+pkg-config package installed.
 
 Building
 --------

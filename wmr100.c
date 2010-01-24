@@ -28,14 +28,14 @@
 #define WMR100_VENDOR_ID  0x0fde
 #define WMR100_PRODUCT_ID 0xca01
 
-// constants
+/* constants */
 int const RECV_PACKET_LEN   = 8;
 int const BUF_SIZE = 255;
 unsigned char const PATHLEN = 2;
 int const PATH_IN[]  = { 0xff000001, 0xff000001 };
 int const PATH_OUT[] = { 0xff000001, 0xff000002 };
-char const INIT_PACKET1[] = { 0x20, 0x00, 0x08, 0x01, 0x00, 0x00, 0x00, 0x00 };
-char const INIT_PACKET2[] = { 0x01, 0xd0, 0x08, 0x01, 0x00, 0x00, 0x00, 0x00 };
+unsigned char const INIT_PACKET1[] = { 0x20, 0x00, 0x08, 0x01, 0x00, 0x00, 0x00, 0x00 };
+unsigned char const INIT_PACKET2[] = { 0x01, 0xd0, 0x08, 0x01, 0x00, 0x00, 0x00, 0x00 };
 
 typedef struct _WMR {
     int pos;
@@ -56,9 +56,9 @@ void dump_packet(unsigned char *packet, int len)
     printf("\n");
 }
 
-// ****************************
-// WMR methods
-// ****************************
+/****************************
+  WMR methods
+ ****************************/
 
 WMR *wmr_new() {
     WMR *wmr = malloc(sizeof(WMR));
@@ -79,10 +79,10 @@ int wmr_init(WMR *wmr) {
     int retries;
 
     /* see include/debug.h for possible values */
-    //hid_set_debug(HID_DEBUG_ALL);
-    //hid_set_debug_stream(stderr);
+    /*hid_set_debug(HID_DEBUG_ALL);*/
+    /*hid_set_debug_stream(stderr);*/
     /* passed directly to libusb */
-    //hid_set_usb_debug(0);
+    /*hid_set_usb_debug(0);*/
   
     ret = hid_init();
     if (ret != HID_RET_SUCCESS) {
@@ -117,12 +117,6 @@ int wmr_init(WMR *wmr) {
 	return 1;
     }
 
-    //ret = hid_dump_tree(stdout, wmr->hid);
-    //if (ret != HID_RET_SUCCESS) {
-    //    fprintf(stderr, "hid_dump_tree failed with return code %d\n", ret);
-    //    return 1;
-    //}
-
     wmr_send_packet_init(wmr);
     wmr_send_packet_ready(wmr);
     return 0;
@@ -131,7 +125,7 @@ int wmr_init(WMR *wmr) {
 int wmr_send_packet_init(WMR *wmr) {
     int ret;
 
-    ret = hid_set_output_report(wmr->hid, PATH_IN, PATHLEN, INIT_PACKET1, sizeof(INIT_PACKET1));
+    ret = hid_set_output_report(wmr->hid, PATH_IN, PATHLEN, (char*)INIT_PACKET1, sizeof(INIT_PACKET1));
     if (ret != HID_RET_SUCCESS) {
 	fprintf(stderr, "hid_set_output_report failed with return code %d\n", ret);
 	return;
@@ -141,7 +135,7 @@ int wmr_send_packet_init(WMR *wmr) {
 int wmr_send_packet_ready(WMR *wmr) {
     int ret;
     
-    ret = hid_set_output_report(wmr->hid, PATH_IN, PATHLEN, INIT_PACKET2, sizeof(INIT_PACKET2));
+    ret = hid_set_output_report(wmr->hid, PATH_IN, PATHLEN, (char*)INIT_PACKET2, sizeof(INIT_PACKET2));
     if (ret != HID_RET_SUCCESS) {
 	fprintf(stderr, "hid_set_output_report failed with return code %d\n", ret);
 	return;
@@ -182,7 +176,7 @@ void wmr_read_packet(WMR *wmr)
 
     ret = hid_interrupt_read(wmr->hid,
 			     USB_ENDPOINT_IN + 1,
-			     wmr->buffer,
+			     (char*)wmr->buffer,
 			     RECV_PACKET_LEN,
 			     0);
     if (ret != HID_RET_SUCCESS) {
@@ -192,11 +186,11 @@ void wmr_read_packet(WMR *wmr)
     }
     
     len = wmr->buffer[0];
-    if (len > 7) len = 7; // limit
+    if (len > 7) len = 7; /* limit */
     wmr->pos = 1;
     wmr->remain = len;
     
-    //dump_packet(wmr->buffer + 1, wmr->remain);
+    /* dump_packet(wmr->buffer + 1, wmr->remain); */
 }
 
 int wmr_read_byte(WMR *wmr)
@@ -235,7 +229,7 @@ void wmr_log_data(WMR *wmr, char *msg) {
     strftime(outstr, sizeof(outstr), "%Y%m%d%H%M%S", tmp);
 
 	out = wmr->data_fh;
-	// check for rolled log or not open
+	/* check for rolled log or not open */
     if (!access(wmr->data_filename, F_OK) == 0 || wmr->data_fh == NULL) {
 	    if (wmr->data_fh != NULL) fclose(wmr->data_fh);
 		out = wmr->data_fh = fopen(wmr->data_filename, "a+");
@@ -261,9 +255,9 @@ void wmr_handle_rain(WMR *wmr, unsigned char *data, int len)
     power = data[2] >> 4;
     rate = data[3];
     
-    hour = ((data[5] << 8) + data[4]) * 25.4 / 100.0; // mm
-    day = ((data[7] << 8) + data[6]) * 25.4 / 100.0; // mm
-    total = ((data[9] << 8) + data[8]) * 25.4 / 100.0; // mm
+    hour = ((data[5] << 8) + data[4]) * 25.4 / 100.0; /* mm */
+    day = ((data[7] << 8) + data[6]) * 25.4 / 100.0; /* mm */
+    total = ((data[9] << 8) + data[8]) * 25.4 / 100.0; /* mm */
 
     smi = data[10];
     sho = data[11];
@@ -409,23 +403,23 @@ void wmr_read_data(WMR *wmr)
     int i, j, unk1, type, data_len;
     unsigned char *data;
 
-    // search for 0xff marker
+    /* search for 0xff marker */
     i = wmr_read_byte(wmr);
     while(i != 0xff) {
 	i = wmr_read_byte(wmr);
     }
 
-    // search for not 0xff
+    /* search for not 0xff */
     i = wmr_read_byte(wmr);
     while(i == 0xff) {
 	i = wmr_read_byte(wmr);
     }
     unk1 = i;
 
-    // read data type
+    /* read data type */
     type = wmr_read_byte(wmr);
 
-    // read rest of data
+    /* read rest of data */
     data_len = 0;
     switch(type) {
     case 0x41:
@@ -465,7 +459,7 @@ void wmr_read_data(WMR *wmr)
 	free(data);
     }
 
-    // send ack
+    /* send ack */
     wmr_send_packet_ready(wmr);
 }
 
