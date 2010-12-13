@@ -37,6 +37,13 @@ Run 'make'.
 
 To install, copy wmr100 to your path.
 
+*One time install for osx*
+To keep the default HIDManager from taking the wmr100, run this once: `make setup_osx`
+If you want to use different software to read the wmr100 device, you should undo this by running
+`make unsetup_osx` and then reboot so that the HIDManager will take control of the device again.
+
+
+
 Usage
 -----
 
