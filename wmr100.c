@@ -302,6 +302,22 @@ void wmr_handle_temp(WMR *wmr, unsigned char *data, int len)
     free(msg);
 }
 
+void wmr_handle_water(WMR *wmr, unsigned char *data, int len)
+{
+  int sensor;
+  float temp;
+  char *msg;
+
+  sensor = data[2] & 0x0f;
+
+  temp = (data[3] + ((data[4] & 0x0f) << 8)) / 10.0;
+  if ((data[4] >> 4) == 0x8) temp = -temp;
+
+  asprintf(&msg, "type=WATER,sensor=%d,temp=%.1f", sensor, temp);
+  wmr_log_data(wmr, msg);
+  free(msg);
+}
+
 void wmr_handle_pressure(WMR *wmr, unsigned char *data, int len)
 {
     int pressure, forecast, alt_pressure, alt_forecast;
@@ -383,6 +399,9 @@ void wmr_handle_packet(WMR *wmr, unsigned char *data, int len)
     case 0x42:
 	wmr_handle_temp(wmr, data, len);
 	break;
+    case 0x44:
+	wmr_handle_water(wmr, data, len);
+	break;
     case 0x46:
 	wmr_handle_pressure(wmr, data, len);
 	break;
@@ -427,6 +446,9 @@ void wmr_read_data(WMR *wmr)
 	break;
     case 0x42:
 	data_len = 12;
+	break;
+    case 0x44:
+	data_len = 7;
 	break;
     case 0x46:
 	data_len = 8;
