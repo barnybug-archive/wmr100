@@ -19,7 +19,9 @@
  */
 
 #include <hid.h>
+#include <inttypes.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 #include <signal.h>
 #include <time.h>
@@ -143,7 +145,7 @@ int wmr_send_packet_ready(WMR *wmr) {
 }
 
 void wmr_print_state(WMR *wmr) {
-  fprintf(stderr, "WMR: HID: %08x\n", (unsigned int)wmr->hid);
+  fprintf(stderr, "WMR: HID: %"PRIxPTR, (uintptr_t)wmr->hid);
 }
 
 int wmr_close(WMR *wmr) {
