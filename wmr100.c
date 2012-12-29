@@ -28,6 +28,13 @@
 #define WMR100_VENDOR_ID  0x0fde
 #define WMR100_PRODUCT_ID 0xca01
 
+/* globals */
+#define OUTPUT_BOTH 3
+#define OUTPUT_FILE 2
+#define OUTPUT_STDOUT 1
+
+int gOutput = OUTPUT_BOTH;
+
 /* constants */
 int const RECV_PACKET_LEN   = 8;
 int const BUF_SIZE = 255;
@@ -239,9 +246,13 @@ void wmr_log_data(WMR *wmr, char *msg) {
         }
     }
 
-    fprintf(out, "DATA[%s]:%s\n", outstr, msg);
-    fflush(out);
-    printf("DATA[%s]:%s\n", outstr, msg);
+    if (gOutput & OUTPUT_FILE)
+    {
+        fprintf(out, "DATA[%s]:%s\n", outstr, msg);
+        fflush(out);
+    }
+    if (gOutput & OUTPUT_STDOUT)
+        printf("DATA[%s]:%s\n", outstr, msg);
 }
 
 void wmr_handle_rain(WMR *wmr, unsigned char *data, int len)
@@ -298,6 +309,7 @@ void wmr_handle_temp(WMR *wmr, unsigned char *data, int len)
     if ((data[7] >> 4) == 0x8) dewpoint = -dewpoint;
     
     sprintf(msg, "type=TEMP,sensor=%d,smile=%d,trend=%s,temp=%.1f,humidity=%d,dewpoint=%.1f", sensor, smiley, trendTxt, temp, humidity, dewpoint);
+
     wmr_log_data(wmr, msg);
     free(msg);
 }
@@ -390,7 +402,8 @@ void wmr_handle_clock(WMR *wmr, unsigned char *data, int len)
 
 void wmr_handle_packet(WMR *wmr, unsigned char *data, int len)
 {
-    dump_packet(data, len);
+	if (gOutput & OUTPUT_STDOUT)
+	    dump_packet(data, len);
     
     switch(data[1]) {
     case 0x41:
@@ -507,12 +520,39 @@ void cleanup(int sig_num)
     exit(0);
 }
 
-int main(void)
+int main(int argc, char* argv[])
 {
     int ret;
-
+    int c;
+    
     signal(SIGINT, cleanup);
     signal(SIGTERM, cleanup);
+
+    /* Parse the command line parameters */
+    while ((c = getopt(argc, argv, "hsfb")) != -1)
+    {
+        switch (c)
+        {
+		case 'h':
+			fprintf(stderr, "Options:\n\t-s: output to sdtout only\n\t-f: output to file only\n\t-b: output to both [default]\n");
+			return 1;
+        case 's': 
+            gOutput = OUTPUT_STDOUT;
+            break;
+        case 'f':
+            gOutput = OUTPUT_FILE;
+            break;
+        case 'b':
+            gOutput = OUTPUT_BOTH;
+            break;
+        case '?':
+            if (isprint(optopt))
+                fprintf(stderr, "Unknown option `-%c'.\n", optopt);
+            return 1;
+        default:
+            abort();
+        }
+    }
 
     wmr = wmr_new();
     if (wmr == NULL) {
