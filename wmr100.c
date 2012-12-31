@@ -59,7 +59,7 @@ void dump_packet(unsigned char *packet, int len)
 
     printf("Receive packet len %d: ", len);
     for(i = 0; i < len; ++i)
-    printf("%02x ", (int)packet[i]);
+	printf("%02x ", (int)packet[i]);
     printf("\n");
 }
 
@@ -93,25 +93,25 @@ int wmr_init(WMR *wmr) {
   
     ret = hid_init();
     if (ret != HID_RET_SUCCESS) {
-    fprintf(stderr, "hid_init failed with return code %d\n", ret);
-    return 1;
+	fprintf(stderr, "hid_init failed with return code %d\n", ret);
+	return 1;
     }
 
     wmr->hid = hid_new_HIDInterface();
     if (wmr->hid == 0) {
-    fprintf(stderr, "hid_new_HIDInterface() failed, out of memory?\n");
-    return 1;
+	fprintf(stderr, "hid_new_HIDInterface() failed, out of memory?\n");
+	return 1;
     }
 
     retries = 5;
     while(retries > 0) {
         ret = hid_force_open(wmr->hid, 0, &matcher, 10);
-    if (ret == HID_RET_SUCCESS) break;
+	if (ret == HID_RET_SUCCESS) break;
 
-    fprintf(stderr, "Open failed, sleeping 5 seconds before retrying..\n");
-    sleep(5);
+	fprintf(stderr, "Open failed, sleeping 5 seconds before retrying..\n");
+	sleep(5);
 
-    --retries;
+	--retries;
     }
     if (ret != HID_RET_SUCCESS) {
       fprintf(stderr, "hid_force_open failed with return code %d\n", ret);
@@ -120,8 +120,8 @@ int wmr_init(WMR *wmr) {
     
     ret = hid_write_identification(stdout, wmr->hid);
     if (ret != HID_RET_SUCCESS) {
-    fprintf(stderr, "hid_write_identification failed with return code %d\n", ret);
-    return 1;
+	fprintf(stderr, "hid_write_identification failed with return code %d\n", ret);
+	return 1;
     }
 
     wmr_send_packet_init(wmr);
@@ -134,8 +134,8 @@ int wmr_send_packet_init(WMR *wmr) {
 
     ret = hid_set_output_report(wmr->hid, PATH_IN, PATHLEN, (char*)INIT_PACKET1, sizeof(INIT_PACKET1));
     if (ret != HID_RET_SUCCESS) {
-    fprintf(stderr, "hid_set_output_report failed with return code %d\n", ret);
-    return;
+	fprintf(stderr, "hid_set_output_report failed with return code %d\n", ret);
+	return;
     }
 }
 
@@ -144,8 +144,8 @@ int wmr_send_packet_ready(WMR *wmr) {
     
     ret = hid_set_output_report(wmr->hid, PATH_IN, PATHLEN, (char*)INIT_PACKET2, sizeof(INIT_PACKET2));
     if (ret != HID_RET_SUCCESS) {
-    fprintf(stderr, "hid_set_output_report failed with return code %d\n", ret);
-    return;
+	fprintf(stderr, "hid_set_output_report failed with return code %d\n", ret);
+	return;
     }
 }
 
@@ -158,8 +158,8 @@ int wmr_close(WMR *wmr) {
 
     ret = hid_close(wmr->hid);
     if (ret != HID_RET_SUCCESS) {
-    fprintf(stderr, "hid_close failed with return code %d\n", ret);
-    return 1;
+	fprintf(stderr, "hid_close failed with return code %d\n", ret);
+	return 1;
     }
 
     hid_delete_HIDInterface(&wmr->hid);
@@ -167,13 +167,13 @@ int wmr_close(WMR *wmr) {
 
     ret = hid_cleanup();
     if (ret != HID_RET_SUCCESS) {
-    fprintf(stderr, "hid_cleanup failed with return code %d\n", ret);
-    return 1;
+	fprintf(stderr, "hid_cleanup failed with return code %d\n", ret);
+	return 1;
     }
 
     if (wmr->data_fh && wmr->data_fh != stdout) {
-    fclose(wmr->data_fh);
-    wmr->data_fh = NULL;
+	fclose(wmr->data_fh);
+	wmr->data_fh = NULL;
     }
 }
 
@@ -182,14 +182,14 @@ void wmr_read_packet(WMR *wmr)
     int ret, len, i;
 
     ret = hid_interrupt_read(wmr->hid,
-                 USB_ENDPOINT_IN + 1,
-                 (char*)wmr->buffer,
-                 RECV_PACKET_LEN,
-                 0);
+			     USB_ENDPOINT_IN + 1,
+			     (char*)wmr->buffer,
+			     RECV_PACKET_LEN,
+			     0);
     if (ret != HID_RET_SUCCESS) {
-    fprintf(stderr, "hid_interrupt_read failed with return code %d\n", ret);
-    exit(-1);
-    return;
+	fprintf(stderr, "hid_interrupt_read failed with return code %d\n", ret);
+	exit(-1);
+	return;
     }
     
     len = wmr->buffer[0];
@@ -203,7 +203,7 @@ void wmr_read_packet(WMR *wmr)
 int wmr_read_byte(WMR *wmr)
 {
     while(wmr->remain == 0) {
-    wmr_read_packet(wmr);
+	wmr_read_packet(wmr);
     }
     wmr->remain--;
 
@@ -213,13 +213,13 @@ int wmr_read_byte(WMR *wmr)
 int verify_checksum(unsigned char * buf, int len) {
     int i, ret = 0, chk;
     for (i = 0; i < len -2; ++i) {
-    ret += buf[i];
+	ret += buf[i];
     }
     chk = buf[len-2] + (buf[len-1] << 8);
 
     if (ret != chk) {
-    printf("Bad checksum: %d / calc: %d\n", ret, chk);
-    return -1;
+	printf("Bad checksum: %d / calc: %d\n", ret, chk);
+	return -1;
     }
     return 0;
 }
@@ -228,23 +228,23 @@ void wmr_log_data(WMR *wmr, char *msg) {
     char outstr[200];
     time_t t;
     struct tm *tmp;
-    FILE * out;
+	FILE * out;
 
     t = time(NULL);
     tmp = gmtime(&t);
 
     strftime(outstr, sizeof(outstr), "%Y%m%d%H%M%S", tmp);
 
-    out = wmr->data_fh;
-    /* check for rolled log or not open */
+	out = wmr->data_fh;
+	/* check for rolled log or not open */
     if (!access(wmr->data_filename, F_OK) == 0 || wmr->data_fh == NULL) {
-        if (wmr->data_fh != NULL) fclose(wmr->data_fh);
-        out = wmr->data_fh = fopen(wmr->data_filename, "a+");
-        if (wmr->data_fh == NULL) {
-            fprintf(stderr, "ERROR: Couldn't open data log - writing to stderr\n");
-            out = stderr;
-        }
-    }
+	    if (wmr->data_fh != NULL) fclose(wmr->data_fh);
+		out = wmr->data_fh = fopen(wmr->data_filename, "a+");
+		if (wmr->data_fh == NULL) {
+		    fprintf(stderr, "ERROR: Couldn't open data log - writing to stderr\n");
+		    out = stderr;
+		}
+	}
 
     if (gOutput & OUTPUT_FILE)
     {
@@ -407,26 +407,26 @@ void wmr_handle_packet(WMR *wmr, unsigned char *data, int len)
     
     switch(data[1]) {
     case 0x41:
-    wmr_handle_rain(wmr, data, len);
-    break;
+	wmr_handle_rain(wmr, data, len);
+	break;
     case 0x42:
-    wmr_handle_temp(wmr, data, len);
-    break;
+	wmr_handle_temp(wmr, data, len);
+	break;
     case 0x44:
-    wmr_handle_water(wmr, data, len);
-    break;
+	wmr_handle_water(wmr, data, len);
+	break;
     case 0x46:
-    wmr_handle_pressure(wmr, data, len);
-    break;
+	wmr_handle_pressure(wmr, data, len);
+	break;
     case 0x47:
-    wmr_handle_uv(wmr, data, len);
-    break;
+	wmr_handle_uv(wmr, data, len);
+	break;
     case 0x48:
-    wmr_handle_wind(wmr, data, len);
-    break;
+	wmr_handle_wind(wmr, data, len);
+	break;
     case 0x60:
-    wmr_handle_clock(wmr, data, len);
-    break;
+	wmr_handle_clock(wmr, data, len);
+	break;
     }    
 }
 
@@ -438,13 +438,13 @@ void wmr_read_data(WMR *wmr)
     /* search for 0xff marker */
     i = wmr_read_byte(wmr);
     while(i != 0xff) {
-    i = wmr_read_byte(wmr);
+	i = wmr_read_byte(wmr);
     }
 
     /* search for not 0xff */
     i = wmr_read_byte(wmr);
     while(i == 0xff) {
-    i = wmr_read_byte(wmr);
+	i = wmr_read_byte(wmr);
     }
     unk1 = i;
 
@@ -455,43 +455,43 @@ void wmr_read_data(WMR *wmr)
     data_len = 0;
     switch(type) {
     case 0x41:
-    data_len = 17;
-    break;
+	data_len = 17;
+	break;
     case 0x42:
-    data_len = 12;
-    break;
+	data_len = 12;
+	break;
     case 0x44:
-    data_len = 7;
-    break;
+	data_len = 7;
+	break;
     case 0x46:
-    data_len = 8;
-    break;
+	data_len = 8;
+	break;
     case 0x47:
-    data_len = 5;
-    break;
+	data_len = 5;
+	break;
     case 0x48:
-    data_len = 11;
-    break;
+	data_len = 11;
+	break;
     case 0x60:
-    data_len = 12;
-    break;
+	data_len = 12;
+	break;
     default:
-    printf("Unknown packet type: %02x, skipping\n", type);
+	printf("Unknown packet type: %02x, skipping\n", type);
     }
 
     if (data_len > 0) {
-    data = malloc(data_len);
-    data[0] = unk1;
-    data[1] = type;
-    for (j = 2; j < data_len; ++j) {
-        data[j] = wmr_read_byte(wmr);
-    }
+	data = malloc(data_len);
+	data[0] = unk1;
+	data[1] = type;
+	for (j = 2; j < data_len; ++j) {
+	    data[j] = wmr_read_byte(wmr);
+	}
 
-    if (verify_checksum(data, data_len) == 0) {
-        wmr_handle_packet(wmr, data, data_len);
-    }
+	if (verify_checksum(data, data_len) == 0) {
+	    wmr_handle_packet(wmr, data, data_len);
+	}
 
-    free(data);
+	free(data);
     }
 
     /* send ack */
@@ -503,7 +503,7 @@ void wmr_process(WMR *wmr)
     int i;
 
     while(true) {
-    wmr_read_data(wmr);
+	wmr_read_data(wmr);
     }
 }
 
@@ -513,8 +513,8 @@ void cleanup(int sig_num)
 {
     printf("Caught signal, cleaning up\n");
     if (wmr != NULL) {
-    wmr_close(wmr);
-    wmr = NULL;
+	wmr_close(wmr);
+	wmr = NULL;
     }
 
     exit(0);
