@@ -1,0 +1,6 @@
+# udev rule to create nodes with correct membership and permissions for
+# all PTP cameras; must be run before udev.rules
+#
+
+ACTION=="add", SUBSYSTEM=="usb_device", SYSFS{idProduct}=="ca01", SYSFS{idVendor}=="0fde", \
+  MODE="0660", GROUP="weather"
