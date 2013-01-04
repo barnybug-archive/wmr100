@@ -1,11 +1,11 @@
-CPPFLAGS += `pkg-config libhid --cflags` -pedantic
-LDFLAGS += `pkg-config libhid --libs`
+CFLAGS += `pkg-config libhid --cflags` -pedantic -Wall -D_GNU_SOURCE
+LIBS += `pkg-config libhid --libs`
 
 wmr100: wmr100.c
+	cc ${CFLAGS} -o wmr100 wmr100.c ${LIBS}
 
 clean:
 	-rm wmr100
-
 
 setup_osx:
 	sudo cp -r osx/wmr100.kext /System/Library/Extensions/wmr100.kext
