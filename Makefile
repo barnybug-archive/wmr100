@@ -1,4 +1,4 @@
-CFLAGS += `pkg-config libhid --cflags` -pedantic -Wall -D_GNU_SOURCE
+CFLAGS += `pkg-config libhid --cflags` -pedantic -Wall -D_GNU_SOURCE -Wno-overlength-strings
 LIBS += `pkg-config libhid --libs` -lsqlite3 -lpthread
 
 wmr100: wmr100.c
