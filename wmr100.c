@@ -15,7 +15,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 
 #include <hid.h>
@@ -25,11 +24,18 @@
 #include <time.h>
 #include <unistd.h>
 #include <ctype.h>
+#include <sqlite3.h>
+#include <pthread.h>
 
 #define WMR100_VENDOR_ID  0x0fde
 #define WMR100_PRODUCT_ID 0xca01
 
+/****************************
+ Variables definition
+****************************/
+
 /* globals */
+
 #define OUTPUT_BOTH 3
 #define OUTPUT_FILE 2
 #define OUTPUT_STDOUT 1
@@ -37,6 +43,9 @@
 int gOutput = OUTPUT_BOTH;
 
 /* constants */
+
+#define MAXSENSORS 5
+
 int const RECV_PACKET_LEN   = 8;
 int const BUF_SIZE = 255;
 unsigned char const PATHLEN = 2;
@@ -44,6 +53,12 @@ int const PATH_IN[]  = { 0xff000001, 0xff000001 };
 int const PATH_OUT[] = { 0xff000001, 0xff000002 };
 unsigned char const INIT_PACKET1[] = { 0x20, 0x00, 0x08, 0x01, 0x00, 0x00, 0x00, 0x00 };
 unsigned char const INIT_PACKET2[] = { 0x01, 0xd0, 0x08, 0x01, 0x00, 0x00, 0x00, 0x00 };
+
+char *const SMILIES[] = { "  ", ":D", ":(", ":|" };
+char *const TRENDS[] = { "-", "U", "D" };
+char *const WINDIES[] = { "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NWN" };
+
+/* WMR */
 
 typedef struct _WMR {
     int pos;
@@ -54,8 +69,46 @@ typedef struct _WMR {
     char *data_filename;
 } WMR;
 
-void dump_packet(unsigned char *packet, int len)
-{
+WMR *wmr = NULL;
+
+/* Sqlite loggin */
+
+typedef struct _TEMP {
+
+    float temp;
+    int smile;
+    int humidity;
+    float dewpoint;
+    char *trend;
+} TEMP;
+
+typedef struct _WATER {
+
+    float temp;
+} WATER;
+
+typedef struct _CURRENTCONDITION {
+
+    int pressure;
+    int forecast;
+    int rain_rate;
+    float rain_hour_total;
+    float rain_all_total;
+    char *wind_dir;
+    float wind_speed;
+    float wind_avg_speed;
+    int uv;
+    WATER water[MAXSENSORS];
+    TEMP temp[MAXSENSORS];
+} CURRENTCONDITION;
+
+CURRENTCONDITION *currentcondition = NULL;
+
+/****************************
+ Dump packet
+****************************/
+
+void dump_packet(unsigned char *packet, int len){
     int i;
 
     printf("Receive packet len %d: ", len);
@@ -68,7 +121,7 @@ void dump_packet(unsigned char *packet, int len)
   WMR methods
  ****************************/
 
-WMR *wmr_new() {
+WMR *wmr_new(){
     WMR *wmr = malloc(sizeof(WMR));
     wmr->remain = 0;
     wmr->buffer = malloc(BUF_SIZE);
@@ -81,7 +134,7 @@ WMR *wmr_new() {
     return wmr;
 }
 
-void wmr_send_packet_init(WMR *wmr) {
+void wmr_send_packet_init(WMR *wmr){
     int ret;
 
     ret = hid_set_output_report(wmr->hid, PATH_IN, PATHLEN, (char*)INIT_PACKET1, sizeof(INIT_PACKET1));
@@ -91,7 +144,7 @@ void wmr_send_packet_init(WMR *wmr) {
     }
 }
 
-void wmr_send_packet_ready(WMR *wmr) {
+void wmr_send_packet_ready(WMR *wmr){
     int ret;
     
     ret = hid_set_output_report(wmr->hid, PATH_IN, PATHLEN, (char*)INIT_PACKET2, sizeof(INIT_PACKET2));
@@ -101,7 +154,7 @@ void wmr_send_packet_ready(WMR *wmr) {
     }
 }
 
-int wmr_init(WMR *wmr) {
+int wmr_init(WMR *wmr){
     hid_return ret;
     HIDInterfaceMatcher matcher = { WMR100_VENDOR_ID, WMR100_PRODUCT_ID, NULL, NULL, 0 };
     int retries;
@@ -150,11 +203,12 @@ int wmr_init(WMR *wmr) {
     return 0;
 }
 
-void wmr_print_state(WMR *wmr) {
+void wmr_print_state(WMR *wmr){
+
     fprintf(stderr, "WMR: HID: %p\n", (void *)wmr->hid);
 }
 
-int wmr_close(WMR *wmr) {
+int wmr_close(WMR *wmr){
     hid_return ret;
 
     ret = hid_close(wmr->hid);
@@ -179,8 +233,7 @@ int wmr_close(WMR *wmr) {
     return 0;
 }
 
-void wmr_read_packet(WMR *wmr)
-{
+void wmr_read_packet(WMR *wmr){
     int ret, len;
 
     ret = hid_interrupt_read(wmr->hid,
@@ -202,8 +255,7 @@ void wmr_read_packet(WMR *wmr)
     /* dump_packet(wmr->buffer + 1, wmr->remain); */
 }
 
-int wmr_read_byte(WMR *wmr)
-{
+int wmr_read_byte(WMR *wmr){
     while(wmr->remain == 0) {
         wmr_read_packet(wmr);
     }
@@ -257,8 +309,11 @@ void wmr_log_data(WMR *wmr, char *msg) {
         printf("DATA[%s]:%s\n", outstr, msg);
 }
 
-void wmr_handle_rain(WMR *wmr, unsigned char *data, int len)
-{
+/****************************
+  Data handlers
+ ****************************/
+
+void wmr_handle_rain(WMR *wmr, unsigned char *data, int len){
     int sensor, power, rate;
     float hour, day, total;
     int smi, sho, sda, smo, syr;
@@ -283,11 +338,7 @@ void wmr_handle_rain(WMR *wmr, unsigned char *data, int len)
     free(msg);
 }
 
-char *const SMILIES[] = { "  ", ":D", ":(", ":|" };
-char *const TRENDS[] = { "-", "U", "D" };
-
-void wmr_handle_temp(WMR *wmr, unsigned char *data, int len)
-{
+void wmr_handle_temp(WMR *wmr, unsigned char *data, int len){
     int sensor, st, smiley, trend, humidity;
     float temp, dewpoint;
     char *trendTxt = "";
@@ -313,8 +364,7 @@ void wmr_handle_temp(WMR *wmr, unsigned char *data, int len)
     free(msg);
 }
 
-void wmr_handle_water(WMR *wmr, unsigned char *data, int len)
-{
+void wmr_handle_water(WMR *wmr, unsigned char *data, int len){
   int sensor;
   float temp;
   char *msg;
@@ -329,8 +379,7 @@ void wmr_handle_water(WMR *wmr, unsigned char *data, int len)
   free(msg);
 }
 
-void wmr_handle_pressure(WMR *wmr, unsigned char *data, int len)
-{
+void wmr_handle_pressure(WMR *wmr, unsigned char *data, int len){
     int pressure, forecast, alt_pressure, alt_forecast;
     char *msg;
 
@@ -344,8 +393,7 @@ void wmr_handle_pressure(WMR *wmr, unsigned char *data, int len)
     free(msg);
 }
 
-void wmr_handle_uv(WMR *wmr, unsigned char *data, int len)
-{
+void wmr_handle_uv(WMR *wmr, unsigned char *data, int len){
     char *msg;
 
     asprintf(&msg, "type=UV");
@@ -353,10 +401,7 @@ void wmr_handle_uv(WMR *wmr, unsigned char *data, int len)
     free(msg);
 }
 
-char *const WINDIES[] = { "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NWN" };
-
-void wmr_handle_wind(WMR *wmr, unsigned char *data, int len)
-{
+void wmr_handle_wind(WMR *wmr, unsigned char *data, int len){
     char *msg;
     int wind_dir, power, low_speed, high_speed;
     char *wind_str;
@@ -377,8 +422,7 @@ void wmr_handle_wind(WMR *wmr, unsigned char *data, int len)
     free(msg);
 }
 
-void wmr_handle_clock(WMR *wmr, unsigned char *data, int len)
-{
+void wmr_handle_clock(WMR *wmr, unsigned char *data, int len){
     int power, powered, battery, rf, level, mi, hr, dy, mo, yr;
     char *msg;
 
@@ -399,8 +443,11 @@ void wmr_handle_clock(WMR *wmr, unsigned char *data, int len)
     free(msg);
 }
 
-void wmr_handle_packet(WMR *wmr, unsigned char *data, int len)
-{
+/****************************
+ Processing
+ ****************************/
+
+void wmr_handle_packet(WMR *wmr, unsigned char *data, int len){
     if (gOutput & OUTPUT_STDOUT)
         dump_packet(data, len);
     
@@ -429,8 +476,7 @@ void wmr_handle_packet(WMR *wmr, unsigned char *data, int len)
     }    
 }
 
-void wmr_read_data(WMR *wmr)
-{
+void wmr_read_data(WMR *wmr){
     int i, j, unk1, type, data_len;
     unsigned char *data;
 
@@ -497,17 +543,13 @@ void wmr_read_data(WMR *wmr)
     wmr_send_packet_ready(wmr);
 }
 
-void wmr_process(WMR *wmr)
-{
+void wmr_process(WMR *wmr){
     while(true) {
         wmr_read_data(wmr);
     }
 }
 
-WMR *wmr = NULL;
-
-void cleanup(int sig_num)
-{
+void cleanup(int sig_num){
     printf("Caught signal, cleaning up\n");
     if (wmr != NULL) {
         wmr_close(wmr);
@@ -517,11 +559,121 @@ void cleanup(int sig_num)
     exit(0);
 }
 
-int main(int argc, char* argv[])
-{
+/****************************
+ Sqlite database
+****************************/
+
+sqlite3* openDb(){
+
+    sqlite3 *db;
+    char dbFile[16];
+    time_t t;
+    struct tm *tmp;
+    t = time(NULL);
+    tmp = gmtime(&t);
+
+    strftime(dbFile, sizeof(dbFile), "weather-%Y.db", tmp);
+
+    printf("Opening Sqlite database %s...\n",dbFile);
+    if(SQLITE_OK != sqlite3_open(dbFile, &db)) {
+        fprintf(stderr,"Error: Can't open database file\n");
+        return 0;
+    }
+    return db;
+}
+
+void closeDb(sqlite3 *db){
+    sqlite3_close(db);
+}
+
+bool checkTables(sqlite3 *db) {
+
+    int i;
+    char consulta[36];
+    int nTablas = 1;
+    char *tabla[] = {
+        "history"
+    };
+    char *create[] = {
+        "CREATE TABLE history("
+          "history INTEGER PRIMARY KEY,"
+          "date TEXT,"
+          "pressure INTEGER,"
+          "forecast INTEGER,"
+          "rain_rate INTEGER,"
+          "rain_hour_total REAL,"
+          "rain_all_total REAL,"
+          "wind_dir TEXT,"
+          "wind_speed REAL,"
+          "wind_avg_speed REAL,"
+          "uv INTEGER,"
+          "temp1 REAL,"
+          "temp2 REAL,"
+          "temp3 REAL,"
+          "temp4 REAL,"
+          "temp5 REAL,"
+          "smile1 TEXT,"
+          "smile2 TEXT,"
+          "smile3 TEXT,"
+          "smile4 TEXT,"
+          "smile5 TEXT,"
+          "humidity1 INTEGER,"
+          "humidity2 INTEGER,"
+          "humidity3 INTEGER,"
+          "humidity4 INTEGER,"
+          "humidity5 INTEGER,"
+          "dewpoint1 REAL,"
+          "dewpoint2 REAL,"
+          "dewpoint3 REAL,"
+          "dewpoint4 REAL,"
+          "dewpoint5 REAL,"
+          "trend1 TEXT,"
+          "trend2 TEXT,"
+          "trend3 TEXT,"
+          "trend4 TEXT,"
+          "trend5 TEXT,"
+          "waterTemp1 REAL,"
+          "waterTemp2 REAL,"
+          "waterTemp3 REAL,"
+          "waterTemp4 REAL,"
+          "waterTemp5 REAL);"
+    };
+    
+    for( i = 0; i < nTablas; i++) {
+        sprintf(consulta, "SELECT COUNT(*) FROM %s;", tabla[i]);
+        if(SQLITE_OK != sqlite3_exec(db, consulta, 0, 0, 0)) {
+            fprintf(stderr,"La tabla %s no existe\n",tabla[i]);
+            if(SQLITE_OK != sqlite3_exec(db, create[i], 0, 0, 0)) {
+               fprintf(stderr,"Error al crear la tabla %s\n",tabla[i]);
+               return false;
+            }
+        }
+    }
+    return true;
+}
+
+void* sqliteLoggerThreadFct(void *args){
+
+    while(1){
+
+        sleep(1);
+        printf("In the thread\n");    
+    }
+    
+}
+
+/****************************
+ Main
+ ****************************/
+
+int main(int argc, char* argv[]){
+
     int ret;
     int c;
-    
+    sqlite3 *db;
+
+    pthread_t sqliteLoggerThread;
+
     signal(SIGINT, cleanup);
     signal(SIGTERM, cleanup);
 
@@ -550,6 +702,19 @@ int main(int argc, char* argv[])
             abort();
         }
     }
+
+    /* SQLITE INIT */
+    ;
+    if ((db = openDb()) == 0){
+        exit(-1);
+    }
+    checkTables(db);
+    closeDb(db);
+
+    pthread_create(&sqliteLoggerThread, NULL, &sqliteLoggerThreadFct, NULL);
+    /* pthread_cancel(sqliteLoggerThread); */
+
+    /* WMR INIT */
 
     wmr = wmr_new();
     if (wmr == NULL) {
