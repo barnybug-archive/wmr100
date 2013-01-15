@@ -812,7 +812,7 @@ void* sqliteLoggerThreadFct(void *args){
         for (i=0; i < MAXSENSORS; i++){
 
             pthread_mutex_lock(&currentcondition_lock);
-                active = currentcondition->temp[i].active;
+                active = currentcondition->water[i].active;
             pthread_mutex_unlock(&currentcondition_lock);
 
             if (active){
