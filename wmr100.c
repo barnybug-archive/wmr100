@@ -45,7 +45,7 @@ int gOutput = OUTPUT_BOTH;
 /* constants */
 
 #define MAXSENSORS 5
-#define RECORD_HISTORY 60
+#define RECORD_HISTORY 3
 
 int const RECV_PACKET_LEN   = 8;
 int const BUF_SIZE = 255;
@@ -75,7 +75,7 @@ WMR *wmr = NULL;
 /* Sqlite loggin */
 
 typedef struct _TEMP {
-
+    bool active;
     float temp;
     int smile;
     int humidity;
@@ -84,7 +84,7 @@ typedef struct _TEMP {
 } TEMP;
 
 typedef struct _WATER {
-
+    bool active;
     float temp;
 } WATER;
 
@@ -374,6 +374,7 @@ void wmr_handle_temp(WMR *wmr, unsigned char *data, int len){
     if ((data[7] >> 4) == 0x8) dewpoint = -dewpoint;
 
     pthread_mutex_lock(&currentcondition_lock);
+        currentcondition->temp[sensor].active = true;
         currentcondition->temp[sensor].temp = temp;
         currentcondition->temp[sensor].smile = smiley;
         currentcondition->temp[sensor].humidity = humidity;
@@ -397,7 +398,8 @@ void wmr_handle_water(WMR *wmr, unsigned char *data, int len){
   if ((data[4] >> 4) == 0x8) temp = -temp;
 
   pthread_mutex_lock(&currentcondition_lock);
-    currentcondition->water[sensor].temp = temp;
+      currentcondition->water[sensor].active = true;
+      currentcondition->water[sensor].temp = temp;
   pthread_mutex_unlock(&currentcondition_lock);
 
   asprintf(&msg, "type=WATER,sensor=%d,temp=%.1f", sensor, temp);
@@ -631,60 +633,66 @@ bool checkTablesCreated(sqlite3 *db) {
 
     int i;
     char request[36];
-    int nTables = 1;
+    int nTables = 7;
     char *tables[] = {
-        "history"
+        "history",
+        "temperature",
+        "smiley",
+        "humidity",
+        "dewpoint",
+        "trend",
+        "waterTemp"
     };
     char *create[] = {
         "CREATE TABLE history("
-          "history INTEGER PRIMARY KEY,"
-          "date TEXT,"
-          "pressure INTEGER,"
-          "forecast INTEGER,"
-          "rain_rate INTEGER,"
-          "rain_hour_total REAL,"
-          "rain_day_total REAL,"
-          "rain_all_total REAL,"
-          "wind_dir TEXT,"
-          "wind_speed REAL,"
-          "wind_avg_speed REAL,"
-          "uv INTEGER,"
-          "temp1 REAL,"
-          "temp2 REAL,"
-          "temp3 REAL,"
-          "temp4 REAL,"
-          "temp5 REAL,"
-          "smiley1 INTEGER,"
-          "smiley2 INTEGER,"
-          "smiley3 INTEGER,"
-          "smiley4 INTEGER,"
-          "smiley5 INTEGER,"
-          "humidity1 INTEGER,"
-          "humidity2 INTEGER,"
-          "humidity3 INTEGER,"
-          "humidity4 INTEGER,"
-          "humidity5 INTEGER,"
-          "dewpoint1 REAL,"
-          "dewpoint2 REAL,"
-          "dewpoint3 REAL,"
-          "dewpoint4 REAL,"
-          "dewpoint5 REAL,"
-          "trend1 TEXT,"
-          "trend2 TEXT,"
-          "trend3 TEXT,"
-          "trend4 TEXT,"
-          "trend5 TEXT,"
-          "waterTemp1 REAL,"
-          "waterTemp2 REAL,"
-          "waterTemp3 REAL,"
-          "waterTemp4 REAL,"
-          "waterTemp5 REAL);"
+            "history INTEGER PRIMARY KEY,"
+            "date TEXT,"
+            "pressure INTEGER,"
+            "forecast INTEGER,"
+            "rain_rate INTEGER,"
+            "rain_hour_total REAL,"
+            "rain_day_total REAL,"
+            "rain_all_total REAL,"
+            "wind_dir TEXT,"
+            "wind_speed REAL,"
+            "wind_avg_speed REAL,"
+            "uv INTEGER);",
+        "CREATE TABLE temperature("
+            "temperature INTEGER PRIMARY KEY,"
+            "date TEXT,"
+            "sensor INTEGER,"
+            "value REAL);",
+        "CREATE TABLE smiley("
+            "smiley INTEGER PRIMARY KEY,"
+            "date TEXT,"
+            "sensor INTEGER,"
+            "value INTEGER);",
+        "CREATE TABLE humidity("
+            "humidity INTEGER PRIMARY KEY,"
+            "date TEXT,"
+            "sensor INTEGER,"
+            "value INTEGER);",
+        "CREATE TABLE dewpoint("
+            "dewpoint INTEGER PRIMARY KEY,"
+            "date TEXT,"
+            "sensor INTEGER,"
+            "value REAL);",
+        "CREATE TABLE trend("
+            "trend INTEGER PRIMARY KEY,"
+            "date TEXT,"
+            "sensor INTEGER,"
+            "value TEXT);",
+        "CREATE TABLE waterTemp("
+            "waterTemp INTEGER PRIMARY KEY,"
+            "date TEXT,"
+            "sensor INTEGER,"
+            "value REAL);"
     };
     
     for( i = 0; i < nTables; i++) {
         sprintf(request, "SELECT COUNT(*) FROM %s;", tables[i]);
         if(SQLITE_OK != sqlite3_exec(db, request, 0, 0, 0)) {
-            fprintf(stderr,"The table %s no existe\n",tables[i]);
+            fprintf(stderr,"The table [%s] does not existe, creating it\n",tables[i]);
             if(SQLITE_OK != sqlite3_exec(db, create[i], 0, 0, 0)) {
                fprintf(stderr,"Error, can't create table : %s\n",tables[i]);
                return false;
@@ -692,6 +700,18 @@ bool checkTablesCreated(sqlite3 *db) {
         }
     }
     return true;
+}
+
+void writeToDb( sqlite3 *db, char *request, char *currenttime){
+
+    if(SQLITE_OK != sqlite3_exec(db, request, 0, 0, 0)) {
+        fprintf(stderr, "[%s] Can't write to database\n",currenttime);
+        fprintf(stderr, "    Request : %s\n", request );
+        fprintf(stderr, "    Error : %s\n",sqlite3_errmsg(db));
+    }
+    else {
+        printf("[%s] Write to database ok\n",currenttime);
+    }
 }
 
 void* sqliteLoggerThreadFct(void *args){
@@ -703,6 +723,9 @@ void* sqliteLoggerThreadFct(void *args){
         char currenttime[20];
         time_t t;
         struct tm *tmp;
+
+        int i;
+        bool active;
     
         /* Record every RECORD_HISTORY */
 
@@ -722,28 +745,86 @@ void* sqliteLoggerThreadFct(void *args){
 
         pthread_mutex_lock(&currentcondition_lock);
 
-            sprintf(request, "insert into history (date,pressure,forecast,rain_rate,rain_hour_total,rain_day_total,rain_all_total,wind_dir,wind_speed,wind_avg_speed,uv,temp1,temp2,temp3,temp4,temp5,smiley1,smiley2,smiley3,smiley4,smiley5,humidity1 ,humidity2 ,humidity3 ,humidity4 ,humidity5 ,dewpoint1 ,dewpoint2 ,dewpoint3 ,dewpoint4 ,dewpoint5 ,trend1,trend2,trend3,trend4,trend5,waterTemp1,waterTemp2,waterTemp3,waterTemp4,waterTemp5) values('%s',%d,%d,%d,%.2f,%.2f,%.2f,'%s',%.2f,%.2f,%d,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%.2f,%.2f,%.2f,%.2f,%.2f,'%s','%s','%s','%s','%s',%.2f,%.2f,%.2f,%.2f,%.2f);", 
+            sprintf(request, "insert into history (date,pressure,forecast,rain_rate,rain_hour_total,rain_day_total,rain_all_total,wind_dir,wind_speed,wind_avg_speed,uv) values('%s',%d,%d,%d,%.2f,%.2f,%.2f,'%s',%.2f,%.2f,%d);", 
                 currenttime, currentcondition->pressure, currentcondition->forecast,
                 currentcondition->rain_rate, currentcondition->rain_hour_total, currentcondition->rain_day_total,currentcondition->rain_all_total,
                 currentcondition->wind_dir, currentcondition->wind_speed, currentcondition->wind_avg_speed,
-                currentcondition->uv,
-                currentcondition->temp[0].temp,currentcondition->temp[1].temp,currentcondition->temp[2].temp,currentcondition->temp[3].temp,currentcondition->temp[4].temp,
-                currentcondition->temp[0].smile,currentcondition->temp[1].smile,currentcondition->temp[2].smile,currentcondition->temp[3].smile,currentcondition->temp[4].smile,
-                currentcondition->temp[0].humidity,currentcondition->temp[1].humidity,currentcondition->temp[2].humidity,currentcondition->temp[3].humidity,currentcondition->temp[4].humidity,
-                currentcondition->temp[0].dewpoint,currentcondition->temp[1].dewpoint,currentcondition->temp[2].dewpoint,currentcondition->temp[3].dewpoint,currentcondition->temp[4].dewpoint,
-                currentcondition->temp[0].trend,currentcondition->temp[1].trend,currentcondition->temp[2].trend,currentcondition->temp[3].trend,currentcondition->temp[4].trend,
-                currentcondition->water[0].temp,currentcondition->water[1].temp,currentcondition->water[2].temp,currentcondition->water[3].temp,currentcondition->water[4].temp);
+                currentcondition->uv);
 
         pthread_mutex_unlock(&currentcondition_lock);
 
+        writeToDb(db,request,currenttime);
 
-        if(SQLITE_OK != sqlite3_exec(db, request, 0, 0, 0)) {
-            fprintf(stderr, "[%s] Can't write to database\n",currenttime);
-            fprintf(stderr, "    Request : %s\n", request );
-            fprintf(stderr, "    Error : %s\n",sqlite3_errmsg(db));
+        /* Processing temp / humidity sensor */
+
+        for (i=0; i < MAXSENSORS; i++){
+
+            pthread_mutex_lock(&currentcondition_lock);
+                active = currentcondition->temp[i].active;
+            pthread_mutex_unlock(&currentcondition_lock);
+
+            if (active){
+
+                /* Temperature */
+                pthread_mutex_lock(&currentcondition_lock);
+                    sprintf(request, "insert into temperature (date,sensor,value) values('%s',%d,%.2f);", 
+                        currenttime, i, currentcondition->temp[i].temp);                
+                pthread_mutex_unlock(&currentcondition_lock);
+
+                writeToDb(db,request,currenttime);
+
+                /* Smiley */
+                pthread_mutex_lock(&currentcondition_lock);
+                    sprintf(request, "insert into smiley (date,sensor,value) values('%s',%d,%d);", 
+                        currenttime, i, currentcondition->temp[i].smile);                
+                pthread_mutex_unlock(&currentcondition_lock);
+
+                writeToDb(db,request,currenttime);
+
+                /* Humidity */
+                pthread_mutex_lock(&currentcondition_lock);
+                    sprintf(request, "insert into humidity (date,sensor,value) values('%s',%d,%d);", 
+                        currenttime, i, currentcondition->temp[i].humidity);                
+                pthread_mutex_unlock(&currentcondition_lock);
+
+                writeToDb(db,request,currenttime);
+
+                /* Dewpoint */
+                pthread_mutex_lock(&currentcondition_lock);
+                    sprintf(request, "insert into dewpoint (date,sensor,value) values('%s',%d,%.2f);", 
+                        currenttime, i, currentcondition->temp[i].dewpoint);                
+                pthread_mutex_unlock(&currentcondition_lock);
+
+                writeToDb(db,request,currenttime);
+
+                /* Trend */
+                pthread_mutex_lock(&currentcondition_lock);
+                    sprintf(request, "insert into trend (date,sensor,value) values('%s',%d,%s);", 
+                        currenttime, i, currentcondition->temp[i].trend);                
+                pthread_mutex_unlock(&currentcondition_lock);
+
+                writeToDb(db,request,currenttime);
+            }
         }
-        else {
-            printf("[%s] Write to database ok\n",currenttime);
+
+        /* Processing water sensor */
+
+        for (i=0; i < MAXSENSORS; i++){
+
+            pthread_mutex_lock(&currentcondition_lock);
+                active = currentcondition->temp[i].active;
+            pthread_mutex_unlock(&currentcondition_lock);
+
+            if (active){
+
+                /* Water Temp */
+                pthread_mutex_lock(&currentcondition_lock);
+                    sprintf(request, "insert into waterTemp (date,sensor,value) values('%s',%d,%.2f);", 
+                        currenttime, i, currentcondition->water[i].temp);                
+                pthread_mutex_unlock(&currentcondition_lock);
+                
+                writeToDb(db,request,currenttime);
+            }
         }
 
         /* Close the database */
@@ -806,14 +887,16 @@ int main(int argc, char* argv[]){
     currentcondition->wind_avg_speed = -1.0;
     currentcondition->uv = -1;
     
-    for (i=0; i < 5; i++){
+    for (i=0; i < MAXSENSORS; i++){
 
+        currentcondition->temp[i].active = false;
         currentcondition->temp[i].temp = -1.0;
         currentcondition->temp[i].smile = -1;
         currentcondition->temp[i].humidity = -1;
         currentcondition->temp[i].dewpoint = -1.0;
         currentcondition->temp[i].trend = "";    
 
+        currentcondition->water[i].active = false;
         currentcondition->water[i].temp = -1.0;
     }
 
