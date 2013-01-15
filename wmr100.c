@@ -45,7 +45,7 @@ int gOutput = OUTPUT_BOTH;
 /* constants */
 
 #define MAXSENSORS 5
-#define RECORD_HISTORY 3
+#define RECORD_HISTORY 60
 
 int const RECV_PACKET_LEN   = 8;
 int const BUF_SIZE = 255;
@@ -799,7 +799,7 @@ void* sqliteLoggerThreadFct(void *args){
 
                 /* Trend */
                 pthread_mutex_lock(&currentcondition_lock);
-                    sprintf(request, "insert into trend (date,sensor,value) values('%s',%d,%s);", 
+                    sprintf(request, "insert into trend (date,sensor,value) values('%s',%d,'%s');", 
                         currenttime, i, currentcondition->temp[i].trend);                
                 pthread_mutex_unlock(&currentcondition_lock);
 
@@ -822,7 +822,7 @@ void* sqliteLoggerThreadFct(void *args){
                     sprintf(request, "insert into waterTemp (date,sensor,value) values('%s',%d,%.2f);", 
                         currenttime, i, currentcondition->water[i].temp);                
                 pthread_mutex_unlock(&currentcondition_lock);
-                
+
                 writeToDb(db,request,currenttime);
             }
         }
