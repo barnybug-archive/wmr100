@@ -34,13 +34,11 @@
  Variables definition
 ****************************/
 
-/* globals */
+/* Loggin output */
 
-#define OUTPUT_BOTH 3
-#define OUTPUT_FILE 2
-#define OUTPUT_STDOUT 1
-
-int gOutput = OUTPUT_BOTH;
+bool gOutputStdout = false;
+bool gOutputFile = false;
+bool gOutputSqlite = false;
 
 /* constants */
 
@@ -307,12 +305,12 @@ void wmr_log_data(WMR *wmr, char *msg) {
                 }
         }
 
-    if (gOutput & OUTPUT_FILE)
+    if (gOutputFile)
     {
         fprintf(out, "DATA[%s]:%s\n", outstr, msg);
         fflush(out);
     }
-    if (gOutput & OUTPUT_STDOUT)
+    if (gOutputStdout)
         printf("DATA[%s]:%s\n", outstr, msg);
 }
 
@@ -487,7 +485,7 @@ void wmr_handle_clock(WMR *wmr, unsigned char *data, int len){
  ****************************/
 
 void wmr_handle_packet(WMR *wmr, unsigned char *data, int len){
-    if (gOutput & OUTPUT_STDOUT)
+    if (gOutputStdout)
         dump_packet(data, len);
     
     switch(data[1]) {
@@ -597,9 +595,11 @@ void cleanup(int sig_num){
         wmr = NULL;
     }
 
-    pthread_cancel(sqliteLoggerThread);
-    pthread_mutex_destroy(&currentcondition_lock);
-
+    if (gOutputSqlite) {
+        pthread_cancel(sqliteLoggerThread);
+        pthread_mutex_destroy(&currentcondition_lock);    
+    }
+    
     exit(0);
 }
 
@@ -626,6 +626,7 @@ sqlite3* openDb(){
 }
 
 void closeDb(sqlite3 *db){
+
     sqlite3_close(db);
 }
 
@@ -847,21 +848,21 @@ int main(int argc, char* argv[]){
     signal(SIGTERM, cleanup);
 
     /* Parse the command line parameters */
-    while ((c = getopt(argc, argv, "hsfb")) != -1)
+    while ((c = getopt(argc, argv, "hsfd")) != -1)
     {
         switch (c)
         {
         case 'h':
-            fprintf(stderr, "Options:\n\t-s: output to sdtout only\n\t-f: output to file only\n\t-b: output to both [default]\n");
+            fprintf(stderr, "Options:\n\t-s: output to sdtout only\n\t-f: output to file only\n\t-b: output to both [default]\n\t-d: output to sqlite\n");
             return 1;
         case 's': 
-            gOutput = OUTPUT_STDOUT;
+            gOutputStdout = true;
             break;
         case 'f':
-            gOutput = OUTPUT_FILE;
+            gOutputFile = true;
             break;
-        case 'b':
-            gOutput = OUTPUT_BOTH;
+        case 'd':
+            gOutputSqlite = true;
             break;
         case '?':
             if (isprint(optopt))
@@ -872,41 +873,52 @@ int main(int argc, char* argv[]){
         }
     }
 
-    /* CURRENT CONDITION INITIALISATION */
+    fprintf(stderr, "I will writte datas to : \n");
+        if ( gOutputStdout )
+            fprintf(stderr, "    - Stdout\n");
+        if ( gOutputFile )
+            fprintf(stderr, "    - File\n");
+        if ( gOutputSqlite )
+            fprintf(stderr, "    - Sqlite database\n");
 
-    currentcondition = malloc(sizeof(CURRENTCONDITION) + 10 * sizeof(char));
+    if (gOutputSqlite) {
+
+        /* CURRENT CONDITION INITIALISATION */
     
-    currentcondition->pressure = -1;
-    currentcondition->forecast = -1;
-    currentcondition->rain_rate = -1;
-    currentcondition->rain_hour_total = -1.0;
-    currentcondition->rain_day_total = -1.0;
-    currentcondition->rain_all_total = -1.0;
-    currentcondition->wind_dir = "";
-    currentcondition->wind_speed = -1.0;
-    currentcondition->wind_avg_speed = -1.0;
-    currentcondition->uv = -1;
+        currentcondition = malloc(sizeof(CURRENTCONDITION) + 10 * sizeof(char));
+        
+        currentcondition->pressure = -1;
+        currentcondition->forecast = -1;
+        currentcondition->rain_rate = -1;
+        currentcondition->rain_hour_total = -1.0;
+        currentcondition->rain_day_total = -1.0;
+        currentcondition->rain_all_total = -1.0;
+        currentcondition->wind_dir = "";
+        currentcondition->wind_speed = -1.0;
+        currentcondition->wind_avg_speed = -1.0;
+        currentcondition->uv = -1;
+        
+        for (i=0; i < MAXSENSORS; i++){
     
-    for (i=0; i < MAXSENSORS; i++){
-
-        currentcondition->temp[i].active = false;
-        currentcondition->temp[i].temp = -1.0;
-        currentcondition->temp[i].smile = -1;
-        currentcondition->temp[i].humidity = -1;
-        currentcondition->temp[i].dewpoint = -1.0;
-        currentcondition->temp[i].trend = "";    
-
-        currentcondition->water[i].active = false;
-        currentcondition->water[i].temp = -1.0;
-    }
-
-    /* LOGGER THREAD INIT */
-
-    pthread_create(&sqliteLoggerThread, NULL, &sqliteLoggerThreadFct, NULL);
-    if (pthread_mutex_init(&currentcondition_lock, NULL) != 0)
-    {
-        fprintf(stderr,"\nMutex init failed\n");
-        return 1;
+            currentcondition->temp[i].active = false;
+            currentcondition->temp[i].temp = -1.0;
+            currentcondition->temp[i].smile = -1;
+            currentcondition->temp[i].humidity = -1;
+            currentcondition->temp[i].dewpoint = -1.0;
+            currentcondition->temp[i].trend = "";    
+    
+            currentcondition->water[i].active = false;
+            currentcondition->water[i].temp = -1.0;
+        }
+    
+        /* LOGGER THREAD INIT */
+    
+        pthread_create(&sqliteLoggerThread, NULL, &sqliteLoggerThreadFct, NULL);
+        if (pthread_mutex_init(&currentcondition_lock, NULL) != 0)
+        {
+            fprintf(stderr,"\nMutex init failed\n");
+            return 1;
+        }
     }
 
         /* TODO : Move to close function */
