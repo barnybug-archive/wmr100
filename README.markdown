@@ -24,11 +24,15 @@ You'll need to setup the udev rules (see udev/README) if you want to
 run this not as root. This is due to how libhid accesses the USB
 ports.
 
+This fork add support to sqlite logging
+
 Requisites
 ----------
 
 libhid-dev (or similarly named) package installed.
 pkg-config package installed.
+libsqlite3-dev package installed.
+libusb-dev package installed.
 
 Building
 --------
@@ -42,7 +46,7 @@ To keep the default HIDManager from taking the wmr100, run this once: `make setu
 If you want to use different software to read the wmr100 device, you should undo this by running
 `make unsetup_osx` and then reboot so that the HIDManager will take control of the device again.
 
-
+To install on raspberry pi use this script : https://github.com/think-free/pi-scripts/raw/master/InstallWmr100OnPi.sh
 
 Usage
 -----

@@ -15,7 +15,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 
 #include <hid.h>
@@ -25,18 +24,27 @@
 #include <time.h>
 #include <unistd.h>
 #include <ctype.h>
+#include <sqlite3.h>
+#include <pthread.h>
 
 #define WMR100_VENDOR_ID  0x0fde
 #define WMR100_PRODUCT_ID 0xca01
 
-/* globals */
-#define OUTPUT_BOTH 3
-#define OUTPUT_FILE 2
-#define OUTPUT_STDOUT 1
+/****************************
+ Variables definition
+****************************/
 
-int gOutput = OUTPUT_BOTH;
+/* Loggin output */
+
+bool gOutputStdout = false;
+bool gOutputFile = false;
+bool gOutputSqlite = false;
 
 /* constants */
+
+#define MAXSENSORS 5
+#define RECORD_HISTORY 60
+
 int const RECV_PACKET_LEN   = 8;
 int const BUF_SIZE = 255;
 unsigned char const PATHLEN = 2;
@@ -44,6 +52,12 @@ int const PATH_IN[]  = { 0xff000001, 0xff000001 };
 int const PATH_OUT[] = { 0xff000001, 0xff000002 };
 unsigned char const INIT_PACKET1[] = { 0x20, 0x00, 0x08, 0x01, 0x00, 0x00, 0x00, 0x00 };
 unsigned char const INIT_PACKET2[] = { 0x01, 0xd0, 0x08, 0x01, 0x00, 0x00, 0x00, 0x00 };
+
+char *const SMILIES[] = { "  ", ":D", ":(", ":|" };
+char *const TRENDS[] = { "-", "U", "D" };
+char *const WINDIES[] = { "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NWN" };
+
+/* WMR */
 
 typedef struct _WMR {
     int pos;
@@ -54,8 +68,52 @@ typedef struct _WMR {
     char *data_filename;
 } WMR;
 
-void dump_packet(unsigned char *packet, int len)
-{
+WMR *wmr = NULL;
+
+/* Sqlite loggin */
+
+typedef struct _TEMP {
+    bool active;
+    float temp;
+    int smile;
+    int humidity;
+    float dewpoint;
+    char *trend;
+} TEMP;
+
+typedef struct _WATER {
+    bool active;
+    float temp;
+} WATER;
+
+typedef struct _CURRENTCONDITION {
+
+    int pressure;
+    int forecast;
+    int rain_rate;
+    float rain_hour_total;
+    float rain_day_total;
+    float rain_all_total;
+    char *wind_dir;
+    float wind_speed;
+    float wind_avg_speed;
+    int uv;
+    WATER water[MAXSENSORS];
+    TEMP temp[MAXSENSORS];
+} CURRENTCONDITION;
+
+CURRENTCONDITION *currentcondition = NULL;
+
+/* SQLITE WRITTER THREAD */
+
+pthread_t sqliteLoggerThread;
+pthread_mutex_t currentcondition_lock;
+
+/****************************
+ Dump packet
+****************************/
+
+void dump_packet(unsigned char *packet, int len){
     int i;
 
     printf("Receive packet len %d: ", len);
@@ -68,7 +126,7 @@ void dump_packet(unsigned char *packet, int len)
   WMR methods
  ****************************/
 
-WMR *wmr_new() {
+WMR *wmr_new(){
     WMR *wmr = malloc(sizeof(WMR));
     wmr->remain = 0;
     wmr->buffer = malloc(BUF_SIZE);
@@ -81,7 +139,7 @@ WMR *wmr_new() {
     return wmr;
 }
 
-void wmr_send_packet_init(WMR *wmr) {
+void wmr_send_packet_init(WMR *wmr){
     int ret;
 
     ret = hid_set_output_report(wmr->hid, PATH_IN, PATHLEN, (char*)INIT_PACKET1, sizeof(INIT_PACKET1));
@@ -91,7 +149,7 @@ void wmr_send_packet_init(WMR *wmr) {
     }
 }
 
-void wmr_send_packet_ready(WMR *wmr) {
+void wmr_send_packet_ready(WMR *wmr){
     int ret;
     
     ret = hid_set_output_report(wmr->hid, PATH_IN, PATHLEN, (char*)INIT_PACKET2, sizeof(INIT_PACKET2));
@@ -101,7 +159,7 @@ void wmr_send_packet_ready(WMR *wmr) {
     }
 }
 
-int wmr_init(WMR *wmr) {
+int wmr_init(WMR *wmr){
     hid_return ret;
     HIDInterfaceMatcher matcher = { WMR100_VENDOR_ID, WMR100_PRODUCT_ID, NULL, NULL, 0 };
     int retries;
@@ -150,11 +208,12 @@ int wmr_init(WMR *wmr) {
     return 0;
 }
 
-void wmr_print_state(WMR *wmr) {
+void wmr_print_state(WMR *wmr){
+
     fprintf(stderr, "WMR: HID: %p\n", (void *)wmr->hid);
 }
 
-int wmr_close(WMR *wmr) {
+int wmr_close(WMR *wmr){
     hid_return ret;
 
     ret = hid_close(wmr->hid);
@@ -179,8 +238,7 @@ int wmr_close(WMR *wmr) {
     return 0;
 }
 
-void wmr_read_packet(WMR *wmr)
-{
+void wmr_read_packet(WMR *wmr){
     int ret, len;
 
     ret = hid_interrupt_read(wmr->hid,
@@ -202,8 +260,7 @@ void wmr_read_packet(WMR *wmr)
     /* dump_packet(wmr->buffer + 1, wmr->remain); */
 }
 
-int wmr_read_byte(WMR *wmr)
-{
+int wmr_read_byte(WMR *wmr){
     while(wmr->remain == 0) {
         wmr_read_packet(wmr);
     }
@@ -248,17 +305,20 @@ void wmr_log_data(WMR *wmr, char *msg) {
                 }
         }
 
-    if (gOutput & OUTPUT_FILE)
+    if (gOutputFile)
     {
         fprintf(out, "DATA[%s]:%s\n", outstr, msg);
         fflush(out);
     }
-    if (gOutput & OUTPUT_STDOUT)
+    if (gOutputStdout)
         printf("DATA[%s]:%s\n", outstr, msg);
 }
 
-void wmr_handle_rain(WMR *wmr, unsigned char *data, int len)
-{
+/****************************
+  Data handlers
+ ****************************/
+
+void wmr_handle_rain(WMR *wmr, unsigned char *data, int len){
     int sensor, power, rate;
     float hour, day, total;
     int smi, sho, sda, smo, syr;
@@ -278,16 +338,19 @@ void wmr_handle_rain(WMR *wmr, unsigned char *data, int len)
     smo = data[13];
     syr = data[14] + 2000;
 
+    pthread_mutex_lock(&currentcondition_lock);
+        currentcondition->rain_rate = rate;
+        currentcondition->rain_hour_total = hour;
+        currentcondition->rain_day_total = day;
+        currentcondition->rain_all_total = total;
+    pthread_mutex_unlock(&currentcondition_lock);
+
     asprintf(&msg, "type=RAIN,sensor=%d,power=%d,rate=%d,hour_total=%.2f,day_total=%.2f,all_total=%.2f,since=%04d%02d%02d%02d%02d", sensor, power, rate, hour, day, total, syr, smo, sda, sho, smi);
     wmr_log_data(wmr, msg);
     free(msg);
 }
 
-char *const SMILIES[] = { "  ", ":D", ":(", ":|" };
-char *const TRENDS[] = { "-", "U", "D" };
-
-void wmr_handle_temp(WMR *wmr, unsigned char *data, int len)
-{
+void wmr_handle_temp(WMR *wmr, unsigned char *data, int len){
     int sensor, st, smiley, trend, humidity;
     float temp, dewpoint;
     char *trendTxt = "";
@@ -307,14 +370,22 @@ void wmr_handle_temp(WMR *wmr, unsigned char *data, int len)
 
     dewpoint = (data[6] + ((data[7] & 0x0f) << 8)) / 10.0;
     if ((data[7] >> 4) == 0x8) dewpoint = -dewpoint;
+
+    pthread_mutex_lock(&currentcondition_lock);
+        currentcondition->temp[sensor].active = true;
+        currentcondition->temp[sensor].temp = temp;
+        currentcondition->temp[sensor].smile = smiley;
+        currentcondition->temp[sensor].humidity = humidity;
+        currentcondition->temp[sensor].dewpoint = dewpoint;
+        currentcondition->temp[sensor].trend = trendTxt;
+    pthread_mutex_unlock(&currentcondition_lock);
     
     asprintf(&msg, "type=TEMP,sensor=%d,smile=%d,trend=%s,temp=%.1f,humidity=%d,dewpoint=%.1f", sensor, smiley, trendTxt, temp, humidity, dewpoint);
     wmr_log_data(wmr, msg);
     free(msg);
 }
 
-void wmr_handle_water(WMR *wmr, unsigned char *data, int len)
-{
+void wmr_handle_water(WMR *wmr, unsigned char *data, int len){
   int sensor;
   float temp;
   char *msg;
@@ -324,13 +395,17 @@ void wmr_handle_water(WMR *wmr, unsigned char *data, int len)
   temp = (data[3] + ((data[4] & 0x0f) << 8)) / 10.0;
   if ((data[4] >> 4) == 0x8) temp = -temp;
 
+  pthread_mutex_lock(&currentcondition_lock);
+      currentcondition->water[sensor].active = true;
+      currentcondition->water[sensor].temp = temp;
+  pthread_mutex_unlock(&currentcondition_lock);
+
   asprintf(&msg, "type=WATER,sensor=%d,temp=%.1f", sensor, temp);
   wmr_log_data(wmr, msg);
   free(msg);
 }
 
-void wmr_handle_pressure(WMR *wmr, unsigned char *data, int len)
-{
+void wmr_handle_pressure(WMR *wmr, unsigned char *data, int len){
     int pressure, forecast, alt_pressure, alt_forecast;
     char *msg;
 
@@ -339,13 +414,17 @@ void wmr_handle_pressure(WMR *wmr, unsigned char *data, int len)
     alt_pressure = data[4] + ((data[5] & 0x0f) << 8);
     alt_forecast = data[5] >> 4;
 
+    pthread_mutex_lock(&currentcondition_lock);
+        currentcondition->pressure = pressure;
+        currentcondition->forecast = forecast;
+    pthread_mutex_unlock(&currentcondition_lock);
+
     asprintf(&msg, "type=PRESSURE,pressure=%d,forecast=%d,altpressure=%d,altforecast=%d", pressure, forecast, alt_pressure, alt_forecast);
     wmr_log_data(wmr, msg);
     free(msg);
 }
 
-void wmr_handle_uv(WMR *wmr, unsigned char *data, int len)
-{
+void wmr_handle_uv(WMR *wmr, unsigned char *data, int len){
     char *msg;
 
     asprintf(&msg, "type=UV");
@@ -353,10 +432,7 @@ void wmr_handle_uv(WMR *wmr, unsigned char *data, int len)
     free(msg);
 }
 
-char *const WINDIES[] = { "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NWN" };
-
-void wmr_handle_wind(WMR *wmr, unsigned char *data, int len)
-{
+void wmr_handle_wind(WMR *wmr, unsigned char *data, int len){
     char *msg;
     int wind_dir, power, low_speed, high_speed;
     char *wind_str;
@@ -372,13 +448,18 @@ void wmr_handle_wind(WMR *wmr, unsigned char *data, int len)
     high_speed = data[6] << 4;
     avg_speed = (high_speed + low_speed) / 10.0;
 
+    pthread_mutex_lock(&currentcondition_lock);
+        currentcondition->wind_speed = wind_speed;
+        currentcondition->wind_dir = wind_str;
+        currentcondition->wind_avg_speed = avg_speed;
+    pthread_mutex_unlock(&currentcondition_lock);
+
     asprintf(&msg, "type=WIND,power=%d,dir=%s,speed=%.1f,avgspeed=%.1f", power, wind_str, wind_speed, avg_speed);
     wmr_log_data(wmr, msg);
     free(msg);
 }
 
-void wmr_handle_clock(WMR *wmr, unsigned char *data, int len)
-{
+void wmr_handle_clock(WMR *wmr, unsigned char *data, int len){
     int power, powered, battery, rf, level, mi, hr, dy, mo, yr;
     char *msg;
 
@@ -399,9 +480,12 @@ void wmr_handle_clock(WMR *wmr, unsigned char *data, int len)
     free(msg);
 }
 
-void wmr_handle_packet(WMR *wmr, unsigned char *data, int len)
-{
-    if (gOutput & OUTPUT_STDOUT)
+/****************************
+ Processing
+ ****************************/
+
+void wmr_handle_packet(WMR *wmr, unsigned char *data, int len){
+    if (gOutputStdout)
         dump_packet(data, len);
     
     switch(data[1]) {
@@ -429,8 +513,7 @@ void wmr_handle_packet(WMR *wmr, unsigned char *data, int len)
     }    
 }
 
-void wmr_read_data(WMR *wmr)
-{
+void wmr_read_data(WMR *wmr){
     int i, j, unk1, type, data_len;
     unsigned char *data;
 
@@ -497,50 +580,289 @@ void wmr_read_data(WMR *wmr)
     wmr_send_packet_ready(wmr);
 }
 
-void wmr_process(WMR *wmr)
-{
+void wmr_process(WMR *wmr){
     while(true) {
         wmr_read_data(wmr);
     }
 }
 
-WMR *wmr = NULL;
+void cleanup(int sig_num){
 
-void cleanup(int sig_num)
-{
     printf("Caught signal, cleaning up\n");
+
     if (wmr != NULL) {
         wmr_close(wmr);
         wmr = NULL;
     }
 
+    if (gOutputSqlite) {
+        pthread_cancel(sqliteLoggerThread);
+        pthread_mutex_destroy(&currentcondition_lock);    
+    }
+    
     exit(0);
 }
 
-int main(int argc, char* argv[])
-{
+/****************************
+ Sqlite database
+****************************/
+
+sqlite3* openDb(){
+
+    sqlite3 *db;
+    char dbFile[20];
+    time_t t;
+    struct tm *tmp;
+    t = time(NULL);
+    tmp = gmtime(&t);
+
+    strftime(dbFile, sizeof(dbFile), "weather-%Y-%m.db", tmp);
+
+    if(SQLITE_OK != sqlite3_open(dbFile, &db)) {
+        fprintf(stderr,"Error: Can't open database file : %s\n", dbFile);
+        return 0;
+    }
+    return db;
+}
+
+void closeDb(sqlite3 *db){
+
+    sqlite3_close(db);
+}
+
+bool checkTablesCreated(sqlite3 *db) {
+
+    int i;
+    char request[36];
+    int nTables = 7;
+    char *tables[] = {
+        "history",
+        "temperature",
+        "smiley",
+        "humidity",
+        "dewpoint",
+        "trend",
+        "waterTemp"
+    };
+    char *create[] = {
+        "CREATE TABLE history("
+            "history INTEGER PRIMARY KEY,"
+            "date TEXT,"
+            "pressure INTEGER,"
+            "forecast INTEGER,"
+            "rain_rate INTEGER,"
+            "rain_hour_total REAL,"
+            "rain_day_total REAL,"
+            "rain_all_total REAL,"
+            "wind_dir TEXT,"
+            "wind_speed REAL,"
+            "wind_avg_speed REAL,"
+            "uv INTEGER);",
+        "CREATE TABLE temperature("
+            "temperature INTEGER PRIMARY KEY,"
+            "date TEXT,"
+            "sensor INTEGER,"
+            "value REAL);",
+        "CREATE TABLE smiley("
+            "smiley INTEGER PRIMARY KEY,"
+            "date TEXT,"
+            "sensor INTEGER,"
+            "value INTEGER);",
+        "CREATE TABLE humidity("
+            "humidity INTEGER PRIMARY KEY,"
+            "date TEXT,"
+            "sensor INTEGER,"
+            "value INTEGER);",
+        "CREATE TABLE dewpoint("
+            "dewpoint INTEGER PRIMARY KEY,"
+            "date TEXT,"
+            "sensor INTEGER,"
+            "value REAL);",
+        "CREATE TABLE trend("
+            "trend INTEGER PRIMARY KEY,"
+            "date TEXT,"
+            "sensor INTEGER,"
+            "value TEXT);",
+        "CREATE TABLE waterTemp("
+            "waterTemp INTEGER PRIMARY KEY,"
+            "date TEXT,"
+            "sensor INTEGER,"
+            "value REAL);"
+    };
+    
+    for( i = 0; i < nTables; i++) {
+        sprintf(request, "SELECT COUNT(*) FROM %s;", tables[i]);
+        if(SQLITE_OK != sqlite3_exec(db, request, 0, 0, 0)) {
+            fprintf(stderr,"The table [%s] does not existe, creating it\n",tables[i]);
+            if(SQLITE_OK != sqlite3_exec(db, create[i], 0, 0, 0)) {
+               fprintf(stderr,"Error, can't create table : %s\n",tables[i]);
+               return false;
+            }
+        }
+    }
+    return true;
+}
+
+void writeToDb( sqlite3 *db, char *request, char *currenttime){
+
+    if(SQLITE_OK != sqlite3_exec(db, request, 0, 0, 0)) {
+        fprintf(stderr, "[%s] Can't write to database\n",currenttime);
+        fprintf(stderr, "    Request : %s\n", request );
+        fprintf(stderr, "    Error : %s\n",sqlite3_errmsg(db));
+    }
+    else {
+        printf("[%s] Write to database ok\n",currenttime);
+    }
+}
+
+void* sqliteLoggerThreadFct(void *args){
+
+    while(1){
+
+        sqlite3 *db;
+        char request[2000];
+        char currenttime[20];
+        time_t t;
+        struct tm *tmp;
+
+        int i;
+        bool active;
+    
+        /* Record every RECORD_HISTORY */
+
+        sleep(RECORD_HISTORY);
+
+        if ((db = openDb()) == 0){
+            exit(-1);
+        }
+        checkTablesCreated(db);
+    
+        /* Check if the database should be changed */
+
+        t = time(NULL);
+        tmp = gmtime(&t);
+
+        strftime(currenttime, sizeof(currenttime), "%Y%m%d%H%M%S", tmp);
+
+        pthread_mutex_lock(&currentcondition_lock);
+
+            sprintf(request, "insert into history (date,pressure,forecast,rain_rate,rain_hour_total,rain_day_total,rain_all_total,wind_dir,wind_speed,wind_avg_speed,uv) values('%s',%d,%d,%d,%.2f,%.2f,%.2f,'%s',%.2f,%.2f,%d);", 
+                currenttime, currentcondition->pressure, currentcondition->forecast,
+                currentcondition->rain_rate, currentcondition->rain_hour_total, currentcondition->rain_day_total,currentcondition->rain_all_total,
+                currentcondition->wind_dir, currentcondition->wind_speed, currentcondition->wind_avg_speed,
+                currentcondition->uv);
+
+        pthread_mutex_unlock(&currentcondition_lock);
+
+        writeToDb(db,request,currenttime);
+
+        /* Processing temp / humidity sensor */
+
+        for (i=0; i < MAXSENSORS; i++){
+
+            pthread_mutex_lock(&currentcondition_lock);
+                active = currentcondition->temp[i].active;
+            pthread_mutex_unlock(&currentcondition_lock);
+
+            if (active){
+
+                /* Temperature */
+                pthread_mutex_lock(&currentcondition_lock);
+                    sprintf(request, "insert into temperature (date,sensor,value) values('%s',%d,%.2f);", 
+                        currenttime, i, currentcondition->temp[i].temp);                
+                pthread_mutex_unlock(&currentcondition_lock);
+
+                writeToDb(db,request,currenttime);
+
+                /* Smiley */
+                pthread_mutex_lock(&currentcondition_lock);
+                    sprintf(request, "insert into smiley (date,sensor,value) values('%s',%d,%d);", 
+                        currenttime, i, currentcondition->temp[i].smile);                
+                pthread_mutex_unlock(&currentcondition_lock);
+
+                writeToDb(db,request,currenttime);
+
+                /* Humidity */
+                pthread_mutex_lock(&currentcondition_lock);
+                    sprintf(request, "insert into humidity (date,sensor,value) values('%s',%d,%d);", 
+                        currenttime, i, currentcondition->temp[i].humidity);                
+                pthread_mutex_unlock(&currentcondition_lock);
+
+                writeToDb(db,request,currenttime);
+
+                /* Dewpoint */
+                pthread_mutex_lock(&currentcondition_lock);
+                    sprintf(request, "insert into dewpoint (date,sensor,value) values('%s',%d,%.2f);", 
+                        currenttime, i, currentcondition->temp[i].dewpoint);                
+                pthread_mutex_unlock(&currentcondition_lock);
+
+                writeToDb(db,request,currenttime);
+
+                /* Trend */
+                pthread_mutex_lock(&currentcondition_lock);
+                    sprintf(request, "insert into trend (date,sensor,value) values('%s',%d,'%s');", 
+                        currenttime, i, currentcondition->temp[i].trend);                
+                pthread_mutex_unlock(&currentcondition_lock);
+
+                writeToDb(db,request,currenttime);
+            }
+        }
+
+        /* Processing water sensor */
+
+        for (i=0; i < MAXSENSORS; i++){
+
+            pthread_mutex_lock(&currentcondition_lock);
+                active = currentcondition->water[i].active;
+            pthread_mutex_unlock(&currentcondition_lock);
+
+            if (active){
+
+                /* Water Temp */
+                pthread_mutex_lock(&currentcondition_lock);
+                    sprintf(request, "insert into waterTemp (date,sensor,value) values('%s',%d,%.2f);", 
+                        currenttime, i, currentcondition->water[i].temp);                
+                pthread_mutex_unlock(&currentcondition_lock);
+
+                writeToDb(db,request,currenttime);
+            }
+        }
+
+        /* Close the database */
+
+        closeDb(db);
+    }
+}
+
+/****************************
+ Main
+ ****************************/
+
+int main(int argc, char* argv[]){
+
     int ret;
     int c;
-    
+    int i;
+
     signal(SIGINT, cleanup);
     signal(SIGTERM, cleanup);
 
     /* Parse the command line parameters */
-    while ((c = getopt(argc, argv, "hsfb")) != -1)
+    while ((c = getopt(argc, argv, "hsfd")) != -1)
     {
         switch (c)
         {
         case 'h':
-            fprintf(stderr, "Options:\n\t-s: output to sdtout only\n\t-f: output to file only\n\t-b: output to both [default]\n");
+            fprintf(stderr, "Options:\n\t-s: output to sdtout only\n\t-f: output to file only\n\t-b: output to both [default]\n\t-d: output to sqlite\n");
             return 1;
         case 's': 
-            gOutput = OUTPUT_STDOUT;
+            gOutputStdout = true;
             break;
         case 'f':
-            gOutput = OUTPUT_FILE;
+            gOutputFile = true;
             break;
-        case 'b':
-            gOutput = OUTPUT_BOTH;
+        case 'd':
+            gOutputSqlite = true;
             break;
         case '?':
             if (isprint(optopt))
@@ -550,6 +872,60 @@ int main(int argc, char* argv[])
             abort();
         }
     }
+
+    fprintf(stderr, "I will writte datas to : \n");
+        if ( gOutputStdout )
+            fprintf(stderr, "    - Stdout\n");
+        if ( gOutputFile )
+            fprintf(stderr, "    - File\n");
+        if ( gOutputSqlite )
+            fprintf(stderr, "    - Sqlite database\n");
+
+    if (gOutputSqlite) {
+
+        /* CURRENT CONDITION INITIALISATION */
+    
+        currentcondition = malloc(sizeof(CURRENTCONDITION) + 10 * sizeof(char));
+        
+        currentcondition->pressure = -1;
+        currentcondition->forecast = -1;
+        currentcondition->rain_rate = -1;
+        currentcondition->rain_hour_total = -1.0;
+        currentcondition->rain_day_total = -1.0;
+        currentcondition->rain_all_total = -1.0;
+        currentcondition->wind_dir = "";
+        currentcondition->wind_speed = -1.0;
+        currentcondition->wind_avg_speed = -1.0;
+        currentcondition->uv = -1;
+        
+        for (i=0; i < MAXSENSORS; i++){
+    
+            currentcondition->temp[i].active = false;
+            currentcondition->temp[i].temp = -1.0;
+            currentcondition->temp[i].smile = -1;
+            currentcondition->temp[i].humidity = -1;
+            currentcondition->temp[i].dewpoint = -1.0;
+            currentcondition->temp[i].trend = "";    
+    
+            currentcondition->water[i].active = false;
+            currentcondition->water[i].temp = -1.0;
+        }
+    
+        /* LOGGER THREAD INIT */
+    
+        pthread_create(&sqliteLoggerThread, NULL, &sqliteLoggerThreadFct, NULL);
+        if (pthread_mutex_init(&currentcondition_lock, NULL) != 0)
+        {
+            fprintf(stderr,"\nMutex init failed\n");
+            return 1;
+        }
+    }
+
+        /* TODO : Move to close function */
+        /* pthread_cancel(sqliteLoggerThread); */
+        /* pthread_mutex_destroy(&lock); */
+
+    /* WMR INIT */
 
     wmr = wmr_new();
     if (wmr == NULL) {
