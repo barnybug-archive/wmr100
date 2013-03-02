@@ -24,8 +24,6 @@
 #include <time.h>
 #include <unistd.h>
 #include <ctype.h>
-#include <sqlite3.h>
-#include <pthread.h>
 #include <zmq.h>
 #include <sys/time.h>
 #include <assert.h>
@@ -41,7 +39,6 @@
 
 bool gOutputStdout = false;
 bool gOutputFile = false;
-bool gOutputSqlite = false;
 char *gOutputZmq = NULL;
 
 /* Constants */
@@ -75,45 +72,6 @@ typedef struct _WMR {
 } WMR;
 
 WMR *wmr = NULL;
-
-/* Sqlite logging */
-
-typedef struct _TEMP {
-    bool active;
-    float temp;
-    int smile;
-    int humidity;
-    float dewpoint;
-    int trend;
-} TEMP;
-
-typedef struct _WATER {
-    bool active;
-    float temp;
-} WATER;
-
-typedef struct _CURRENTCONDITION {
-
-    int pressure;
-    int forecast;
-    int rain_rate;
-    float rain_hour_total;
-    float rain_day_total;
-    float rain_all_total;
-    char *wind_dir;
-    float wind_speed;
-    float wind_avg_speed;
-    int uv;
-    WATER water[MAXSENSORS];
-    TEMP temp[MAXSENSORS];
-} CURRENTCONDITION;
-
-CURRENTCONDITION *currentcondition = NULL;
-
-/* Sqlite writer thread */
-
-pthread_t sqliteLoggerThread;
-pthread_mutex_t currentcondition_lock;
 
 /****************************
  Dump packet
@@ -385,13 +343,6 @@ void wmr_handle_rain(WMR *wmr, unsigned char *data, int len) {
     smo = data[13];
     syr = data[14] + 2000;
 
-    pthread_mutex_lock(&currentcondition_lock);
-        currentcondition->rain_rate = rate;
-        currentcondition->rain_hour_total = hour;
-        currentcondition->rain_day_total = day;
-        currentcondition->rain_all_total = total;
-    pthread_mutex_unlock(&currentcondition_lock);
-
     asprintf(&msg,
              "\"sensor\": %d, "
              "\"power\": %d, "
@@ -425,15 +376,6 @@ void wmr_handle_temp(WMR *wmr, unsigned char *data, int len){
     dewpoint = (data[6] + ((data[7] & 0x0f) << 8)) / 10.0;
     if ((data[7] >> 4) == 0x8) dewpoint = -dewpoint;
 
-    pthread_mutex_lock(&currentcondition_lock);
-        currentcondition->temp[sensor].active = true;
-        currentcondition->temp[sensor].temp = temp;
-        currentcondition->temp[sensor].smile = smiley;
-        currentcondition->temp[sensor].humidity = humidity;
-        currentcondition->temp[sensor].dewpoint = dewpoint;
-        currentcondition->temp[sensor].trend = trend;
-    pthread_mutex_unlock(&currentcondition_lock);
-    
     asprintf(&msg,
              "\"sensor\": %d, "
              "\"smile\": %d, "
@@ -458,11 +400,6 @@ void wmr_handle_water(WMR *wmr, unsigned char *data, int len){
     if ((data[4] >> 4) == 0x8)
         temp = -temp;
 
-    pthread_mutex_lock(&currentcondition_lock);
-      currentcondition->water[sensor].active = true;
-      currentcondition->water[sensor].temp = temp;
-    pthread_mutex_unlock(&currentcondition_lock);
-
     asprintf(&msg,
              "\"sensor\": %d, "
              "\"temp\": %.1f, "
@@ -480,11 +417,6 @@ void wmr_handle_pressure(WMR *wmr, unsigned char *data, int len){
     forecast = data[3] >> 4;
     alt_pressure = data[4] + ((data[5] & 0x0f) << 8);
     alt_forecast = data[5] >> 4;
-
-    pthread_mutex_lock(&currentcondition_lock);
-        currentcondition->pressure = pressure;
-        currentcondition->forecast = forecast;
-    pthread_mutex_unlock(&currentcondition_lock);
 
     asprintf(&msg,
              "\"pressure\": %d, "
@@ -508,11 +440,9 @@ void wmr_handle_uv(WMR *wmr, unsigned char *data, int len){
 void wmr_handle_wind(WMR *wmr, unsigned char *data, int len){
     char *msg;
     int wind_dir, power, low_speed, high_speed;
-    char *wind_str;
     float wind_speed, avg_speed;
 
     wind_dir = data[2] & 0xf;
-    wind_str = WINDIES[wind_dir];
     power = data[2] >> 4;
     
     wind_speed = data[4] / 10.0;
@@ -520,12 +450,6 @@ void wmr_handle_wind(WMR *wmr, unsigned char *data, int len){
     low_speed = data[5] >> 4;
     high_speed = data[6] << 4;
     avg_speed = (high_speed + low_speed) / 10.0;
-
-    pthread_mutex_lock(&currentcondition_lock);
-    currentcondition->wind_speed = wind_speed;
-    currentcondition->wind_dir = wind_str;
-    currentcondition->wind_avg_speed = avg_speed;
-    pthread_mutex_unlock(&currentcondition_lock);
 
     asprintf(&msg,
              "\"power\": %d, "
@@ -689,236 +613,6 @@ void cleanup(int sig_num) {
 }
 
 /****************************
- Sqlite database
-****************************/
-
-sqlite3* openDb() {
-
-    sqlite3 *db;
-    char dbFile[20];
-    time_t t;
-    struct tm *tmp;
-    t = time(NULL);
-    tmp = gmtime(&t);
-
-    strftime(dbFile, sizeof(dbFile), "weather-%Y-%m.db", tmp);
-
-    if(SQLITE_OK != sqlite3_open(dbFile, &db)) {
-        fprintf(stderr,"Error: Can't open database file : %s\n", dbFile);
-        return 0;
-    }
-    return db;
-}
-
-void closeDb(sqlite3 *db) {
-
-    sqlite3_close(db);
-}
-
-bool checkTablesCreated(sqlite3 *db) {
-
-    int i;
-    char request[36];
-    int nTables = 7;
-    char *tables[] = {
-        "history",
-        "temperature",
-        "smiley",
-        "humidity",
-        "dewpoint",
-        "trend",
-        "waterTemp"
-    };
-    char *create[] = {
-        "CREATE TABLE history("
-            "history INTEGER PRIMARY KEY,"
-            "date TEXT,"
-            "pressure INTEGER,"
-            "forecast INTEGER,"
-            "rain_rate INTEGER,"
-            "rain_hour_total REAL,"
-            "rain_day_total REAL,"
-            "rain_all_total REAL,"
-            "wind_dir TEXT,"
-            "wind_speed REAL,"
-            "wind_avg_speed REAL,"
-            "uv INTEGER);",
-        "CREATE TABLE temperature("
-            "temperature INTEGER PRIMARY KEY,"
-            "date TEXT,"
-            "sensor INTEGER,"
-            "value REAL);",
-        "CREATE TABLE smiley("
-            "smiley INTEGER PRIMARY KEY,"
-            "date TEXT,"
-            "sensor INTEGER,"
-            "value INTEGER);",
-        "CREATE TABLE humidity("
-            "humidity INTEGER PRIMARY KEY,"
-            "date TEXT,"
-            "sensor INTEGER,"
-            "value INTEGER);",
-        "CREATE TABLE dewpoint("
-            "dewpoint INTEGER PRIMARY KEY,"
-            "date TEXT,"
-            "sensor INTEGER,"
-            "value REAL);",
-        "CREATE TABLE trend("
-            "trend INTEGER PRIMARY KEY,"
-            "date TEXT,"
-            "sensor INTEGER,"
-            "value TEXT);",
-        "CREATE TABLE waterTemp("
-            "waterTemp INTEGER PRIMARY KEY,"
-            "date TEXT,"
-            "sensor INTEGER,"
-            "value REAL);"
-    };
-    
-    for( i = 0; i < nTables; i++) {
-        sprintf(request, "SELECT COUNT(*) FROM %s;", tables[i]);
-        if(SQLITE_OK != sqlite3_exec(db, request, 0, 0, 0)) {
-            fprintf(stderr,"The table [%s] does not existe, creating it\n",tables[i]);
-            if(SQLITE_OK != sqlite3_exec(db, create[i], 0, 0, 0)) {
-               fprintf(stderr,"Error, can't create table : %s\n",tables[i]);
-               return false;
-            }
-        }
-    }
-    return true;
-}
-
-void writeToDb( sqlite3 *db, char *request, char *currenttime) {
-
-    if(SQLITE_OK != sqlite3_exec(db, request, 0, 0, 0)) {
-        fprintf(stderr, "[%s] Can't write to database\n",currenttime);
-        fprintf(stderr, "    Request : %s\n", request );
-        fprintf(stderr, "    Error : %s\n",sqlite3_errmsg(db));
-    }
-    else {
-        printf("[%s] Write to database ok\n",currenttime);
-    }
-}
-
-void* sqliteLoggerThreadFct(void *args) {
-
-    while(1){
-
-        sqlite3 *db;
-        char request[2000];
-        char currenttime[20];
-        time_t t;
-        struct tm *tmp;
-
-        int i;
-        bool active;
-    
-        /* Record every RECORD_HISTORY */
-
-        sleep(RECORD_HISTORY);
-
-        if ((db = openDb()) == 0){
-            exit(-1);
-        }
-        checkTablesCreated(db);
-    
-        /* Check if the database should be changed */
-
-        t = time(NULL);
-        tmp = gmtime(&t);
-
-        strftime(currenttime, sizeof(currenttime), "%Y%m%d%H%M%S", tmp);
-
-        pthread_mutex_lock(&currentcondition_lock);
-
-            sprintf(request, "insert into history (date,pressure,forecast,rain_rate,rain_hour_total,rain_day_total,rain_all_total,wind_dir,wind_speed,wind_avg_speed,uv) values('%s',%d,%d,%d,%.2f,%.2f,%.2f,'%s',%.2f,%.2f,%d);", 
-                currenttime, currentcondition->pressure, currentcondition->forecast,
-                currentcondition->rain_rate, currentcondition->rain_hour_total, currentcondition->rain_day_total,currentcondition->rain_all_total,
-                currentcondition->wind_dir, currentcondition->wind_speed, currentcondition->wind_avg_speed,
-                currentcondition->uv);
-
-        pthread_mutex_unlock(&currentcondition_lock);
-
-        writeToDb(db,request,currenttime);
-
-        /* Processing temp / humidity sensor */
-
-        for (i=0; i < MAXSENSORS; i++) {
-
-            pthread_mutex_lock(&currentcondition_lock);
-                active = currentcondition->temp[i].active;
-            pthread_mutex_unlock(&currentcondition_lock);
-
-            if (active) {
-                /* Temperature */
-                pthread_mutex_lock(&currentcondition_lock);
-                sprintf(request, "insert into temperature (date,sensor,value) values('%s',%d,%.2f);", 
-                    currenttime, i, currentcondition->temp[i].temp);                
-                pthread_mutex_unlock(&currentcondition_lock);
-
-                writeToDb(db,request,currenttime);
-
-                /* Smiley */
-                pthread_mutex_lock(&currentcondition_lock);
-                sprintf(request, "insert into smiley (date,sensor,value) values('%s',%d,%d);", 
-                    currenttime, i, currentcondition->temp[i].smile);                
-                pthread_mutex_unlock(&currentcondition_lock);
-
-                writeToDb(db,request,currenttime);
-
-                /* Humidity */
-                pthread_mutex_lock(&currentcondition_lock);
-                sprintf(request, "insert into humidity (date,sensor,value) values('%s',%d,%d);", 
-                    currenttime, i, currentcondition->temp[i].humidity);                
-                pthread_mutex_unlock(&currentcondition_lock);
-
-                writeToDb(db,request,currenttime);
-
-                /* Dewpoint */
-                pthread_mutex_lock(&currentcondition_lock);
-                sprintf(request, "insert into dewpoint (date,sensor,value) values('%s',%d,%.2f);", 
-                    currenttime, i, currentcondition->temp[i].dewpoint);                
-                pthread_mutex_unlock(&currentcondition_lock);
-
-                writeToDb(db,request,currenttime);
-
-                /* Trend */
-                pthread_mutex_lock(&currentcondition_lock);
-                sprintf(request, "insert into trend (date,sensor,value) values('%s',%d,%d);", 
-                    currenttime, i, currentcondition->temp[i].trend);
-                pthread_mutex_unlock(&currentcondition_lock);
-
-                writeToDb(db,request,currenttime);
-            }
-        }
-
-        /* Processing water sensor */
-
-        for (i=0; i < MAXSENSORS; i++){
-
-            pthread_mutex_lock(&currentcondition_lock);
-                active = currentcondition->water[i].active;
-            pthread_mutex_unlock(&currentcondition_lock);
-
-            if (active){
-
-                /* Water Temp */
-                pthread_mutex_lock(&currentcondition_lock);
-                    sprintf(request, "insert into waterTemp (date,sensor,value) values('%s',%d,%.2f);", 
-                        currenttime, i, currentcondition->water[i].temp);                
-                pthread_mutex_unlock(&currentcondition_lock);
-
-                writeToDb(db,request,currenttime);
-            }
-        }
-
-        /* Close the database */
-
-        closeDb(db);
-    }
-}
-
-/****************************
  Main
  ****************************/
 
@@ -929,46 +623,6 @@ int init_output_zmq(WMR *wmr) {
     assert(wmr->zmq_sock != NULL);
     assert(gOutputZmq);
     zmq_connect(wmr->zmq_sock, gOutputZmq);
-
-    return 0;
-}
-
-int init_output_sqlite(WMR *wmr) {
-    int i;
-
-    /* Initialize current condition */
-    currentcondition = malloc(sizeof(CURRENTCONDITION) + 10 * sizeof(char));
-    
-    currentcondition->pressure = -1;
-    currentcondition->forecast = -1;
-    currentcondition->rain_rate = -1;
-    currentcondition->rain_hour_total = -1.0;
-    currentcondition->rain_day_total = -1.0;
-    currentcondition->rain_all_total = -1.0;
-    currentcondition->wind_dir = "";
-    currentcondition->wind_speed = -1.0;
-    currentcondition->wind_avg_speed = -1.0;
-    currentcondition->uv = -1;
-    
-    for (i=0; i < MAXSENSORS; i++) {
-        currentcondition->temp[i].active = false;
-        currentcondition->temp[i].temp = -1.0;
-        currentcondition->temp[i].smile = -1;
-        currentcondition->temp[i].humidity = -1;
-        currentcondition->temp[i].dewpoint = -1.0;
-        currentcondition->temp[i].trend = 0;
-
-        currentcondition->water[i].active = false;
-        currentcondition->water[i].temp = -1.0;
-    }
-
-    /* Initialize thread */
-    pthread_create(&sqliteLoggerThread, NULL, &sqliteLoggerThreadFct, NULL);
-    if (pthread_mutex_init(&currentcondition_lock, NULL) != 0)
-    {
-        perror("Mutex init failed");
-        return 1;
-    }
 
     return 0;
 }
@@ -989,7 +643,6 @@ int main(int argc, char* argv[]) {
             fprintf(stderr, "Options:\n"
                 "\t-s: output to sdtout only\n"
                 "\t-f: output to file only\n"
-                "\t-d: output to sqlite\n"
                 "\t-z endpoint (eg. tcp://*:8790): output to zmq endpoint\n");
             return 1;
         case 's': 
@@ -997,9 +650,6 @@ int main(int argc, char* argv[]) {
             break;
         case 'f':
             gOutputFile = true;
-            break;
-        case 'd':
-            gOutputSqlite = true;
             break;
         case 'z':
             gOutputZmq = optarg; /* zeromq endpoint */
@@ -1013,7 +663,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (!(gOutputStdout || gOutputFile || gOutputSqlite || gOutputZmq)) {
+    if (!(gOutputStdout || gOutputFile || gOutputZmq)) {
         /* set default outputs */
         gOutputStdout = true;
         gOutputFile = true;        
@@ -1031,18 +681,10 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "- Stdout\n");
     if (gOutputFile)
         fprintf(stderr, "- File\n");
-    if (gOutputSqlite) {
-        fprintf(stderr, "- Sqlite database\n");
-        init_output_sqlite(wmr);
-    }
     if (gOutputZmq) {
         fprintf(stderr, "- Zmq\n");
         init_output_zmq(wmr);
     }
-
-    /* TODO : Move to close function */
-    /* pthread_cancel(sqliteLoggerThread); */
-    /* pthread_mutex_destroy(&lock); */
 
     printf("Opening WMR100...\n");
     ret = wmr_init(wmr);

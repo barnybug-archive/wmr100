@@ -23,7 +23,6 @@ a JSON format, easy for parsing/analysing.
 You can output to:
 - stdout
 - a file
-- a sqlite database
 - a zeromq socket
 
 You'll need to setup the udev rules (see udev/README) if you want to run this
@@ -35,7 +34,6 @@ Requisites
 Packages:
 - libhid-dev
 - pkg-config
-- libsqlite3-dev
 - libusb-dev
 - libzmq-dev
 
