@@ -1,5 +1,5 @@
 CFLAGS += `pkg-config libhid --cflags` -pedantic -Wall -D_GNU_SOURCE
-LIBS += `pkg-config libhid --libs` -lsqlite3 -lpthread
+LIBS += `pkg-config libhid --libs` -lsqlite3 -lpthread -lzmq
 
 wmr100: wmr100.c
 	cc ${CFLAGS} -o wmr100 wmr100.c ${LIBS}
