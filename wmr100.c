@@ -351,7 +351,8 @@ void wmr_handle_rain(WMR *wmr, unsigned char *data, int len) {
              "\"day_total\": %.2f, "
              "\"all_total\": %.2f, "
              "\"since\": \"%04d%02d%02d%02d%02d\", "
-             "\"source\": \"wmr100.%d\"",
+             "\"source\": \"wmr100.%d\", "
+             "\"origin\": \"wmr100\"",
              sensor, power, rate, hour, day, total, syr, smo, sda, sho, smi, sensor);
     wmr_log_data(wmr, "rain", msg);
     free(msg);
@@ -383,7 +384,8 @@ void wmr_handle_temp(WMR *wmr, unsigned char *data, int len){
              "\"temp\": %.1f, "
              "\"humidity\": %d, "
              "\"dewpoint\": %.1f, "
-             "\"source\": \"wmr100.%d\"",
+             "\"source\": \"wmr100.%d\", "
+             "\"origin\": \"wmr100\"",
              sensor, smiley, trend, temp, humidity, dewpoint, sensor);
     wmr_log_data(wmr, "temp", msg);
     free(msg);
@@ -403,7 +405,8 @@ void wmr_handle_water(WMR *wmr, unsigned char *data, int len){
     asprintf(&msg,
              "\"sensor\": %d, "
              "\"temp\": %.1f, "
-             "\"source\": \"wmr100\"",
+             "\"source\": \"wmr100\", "
+             "\"origin\": \"wmr100\"",
              sensor, temp);
     wmr_log_data(wmr, "water", msg);
     free(msg);
@@ -423,7 +426,8 @@ void wmr_handle_pressure(WMR *wmr, unsigned char *data, int len){
              "\"forecast\": %d, "
              "\"altpressure\": %d, "
              "\"altforecast\": %d, "
-             "\"source\": \"wmr100\"",
+             "\"source\": \"wmr100\", "
+             "\"origin\": \"wmr100\"",
              pressure, forecast, alt_pressure, alt_forecast);
     wmr_log_data(wmr, "pressure", msg);
     free(msg);
@@ -456,7 +460,8 @@ void wmr_handle_wind(WMR *wmr, unsigned char *data, int len){
              "\"dir\": %d, "
              "\"speed\": %.1f, "
              "\"avgspeed\": %.1f, "
-             "\"source\": \"wmr100\"",
+             "\"source\": \"wmr100\", "
+             "\"origin\": \"wmr100\"",
              power, wind_dir, wind_speed, avg_speed);
     wmr_log_data(wmr, "wind", msg);
     free(msg);
@@ -484,7 +489,8 @@ void wmr_handle_clock(WMR *wmr, unsigned char *data, int len){
              "\"battery\": %d, "
              "\"rf\": %d, "
              "\"level\": %d, "
-             "\"source\": \"wmr100\"",
+             "\"source\": \"wmr100\", "
+             "\"origin\": \"wmr100\"",
              yr, mo, dy, hr, mi, powered, battery, rf, level);
     wmr_log_data(wmr, "clock", msg);
     free(msg);
