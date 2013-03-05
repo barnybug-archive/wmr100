@@ -279,10 +279,8 @@ void wmr_output_zmq(WMR *wmr, char *topic, char *msg) {
     /* message format is: topic\0json, for pubsub subscription matching */
     data = (char *)zmq_msg_data(&zmsg);
     strcpy(data, topic);
-    data += strlen(topic);
-    data[0] = '\0';
-    data += 1;
-    strcpy(data, msg);
+    data += strlen(topic) + 1;
+    memcpy(data, msg, strlen(msg));
     zmq_send(wmr->zmq_sock, &zmsg, 0);
     zmq_msg_close(&zmsg);
 }
