@@ -267,6 +267,7 @@ void wmr_output_file(WMR *wmr, char *msg) {
 
 void wmr_output_stdout(WMR *wmr, char *msg) {
     printf("%s\n", msg);
+    fflush(stdout);
 }
 
 void wmr_output_zmq(WMR *wmr, char *topic, char *msg) {
