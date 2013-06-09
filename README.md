@@ -4,9 +4,9 @@ Oregon Scientific WMR100 client for Linux/BSD/etc.
 Supports
 --------
 
-Oregon Scientific WMR100
-Oregon Scientific WMR200
-Oregon Scientific RMS300A
+* Oregon Scientific WMR100
+* Oregon Scientific WMR200
+* Oregon Scientific RMS300A
 
 Introduction
 ------------
