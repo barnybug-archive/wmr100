@@ -271,19 +271,16 @@ void wmr_output_stdout(WMR *wmr, char *msg) {
 }
 
 void wmr_output_zmq(WMR *wmr, char *topic, char *msg) {
-    zmq_msg_t zmsg;
     int len = strlen(topic) + 1 + strlen(msg);
-    char *data;
-
-    zmq_msg_init_size(&zmsg, len);
+    void *buf = malloc(len);
+    char *data = (char *)buf;
 
     /* message format is: topic\0json, for pubsub subscription matching */
-    data = (char *)zmq_msg_data(&zmsg);
     strcpy(data, topic);
     data += strlen(topic) + 1;
     memcpy(data, msg, strlen(msg));
-    zmq_send(wmr->zmq_sock, &zmsg, 0);
-    zmq_msg_close(&zmsg);
+    zmq_send(wmr->zmq_sock, buf, len, 0);
+    free(buf);
 }
 
 void wmr_log_data(WMR *wmr, char *topic, char *msg) {
