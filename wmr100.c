@@ -2,7 +2,7 @@
  * Oregon Scientific WMR100/200 protocol. Tested on wmr100.
  *
  * Copyright 2009 Barnaby Gray <barnaby@pickle.me.uk>
- * 
+ *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
@@ -80,10 +80,10 @@ WMR *wmr = NULL;
 void dump_packet(unsigned char *packet, int len){
     int i;
 
-    printf("Receive packet len %d: ", len);
+    fprintf(stderr, "Receive packet len %d: ", len);
     for(i = 0; i < len; ++i)
-        printf("%02x ", (int)packet[i]);
-    printf("\n");
+        fprintf(stderr, "%02x ", (int)packet[i]);
+    fprintf(stderr, "\n");
 }
 
 /****************************
@@ -115,7 +115,7 @@ void wmr_send_packet_init(WMR *wmr){
 
 void wmr_send_packet_ready(WMR *wmr){
     int ret;
-    
+
     ret = hid_set_output_report(wmr->hid, PATH_IN, PATHLEN, (char*)INIT_PACKET2, sizeof(INIT_PACKET2));
     if (ret != HID_RET_SUCCESS) {
         fprintf(stderr, "hid_set_output_report failed with return code %d\n", ret);
@@ -133,7 +133,7 @@ int wmr_init(WMR *wmr){
     /*hid_set_debug_stream(stderr);*/
     /* passed directly to libusb */
     /*hid_set_usb_debug(0);*/
-  
+
     ret = hid_init();
     if (ret != HID_RET_SUCCESS) {
         fprintf(stderr, "hid_init failed with return code %d\n", ret);
@@ -160,8 +160,8 @@ int wmr_init(WMR *wmr){
       fprintf(stderr, "hid_force_open failed with return code %d\n", ret);
       return 1;
     }
-    
-    ret = hid_write_identification(stdout, wmr->hid);
+
+    ret = hid_write_identification(stderr, wmr->hid);
     if (ret != HID_RET_SUCCESS) {
         fprintf(stderr, "hid_write_identification failed with return code %d\n", ret);
         return 1;
@@ -215,12 +215,12 @@ void wmr_read_packet(WMR *wmr){
         exit(-1);
         return;
     }
-    
+
     len = wmr->buffer[0];
     if (len > 7) len = 7; /* limit */
     wmr->pos = 1;
     wmr->remain = len;
-    
+
     /* dump_packet(wmr->buffer + 1, wmr->remain); */
 }
 
@@ -241,7 +241,7 @@ int verify_checksum(unsigned char * buf, int len) {
     chk = buf[len-2] + (buf[len-1] << 8);
 
     if (ret != chk) {
-        printf("Bad checksum: %d / calc: %d\n", ret, chk);
+        fprintf(stderr, "Bad checksum: %d / calc: %d\n", ret, chk);
         return -1;
     }
     return 0;
@@ -266,7 +266,7 @@ void wmr_output_file(WMR *wmr, char *msg) {
 }
 
 void wmr_output_stdout(WMR *wmr, char *msg) {
-    printf("%s\n", msg);
+    fprintf(stdout, "%s\n", msg);
     fflush(stdout);
 }
 
@@ -324,11 +324,11 @@ void wmr_handle_rain(WMR *wmr, unsigned char *data, int len) {
     float hour, day, total;
     int smi, sho, sda, smo, syr;
     char *msg;
-    
+
     sensor = data[2] & 0x0f;
     power = data[2] >> 4;
     rate = data[3];
-    
+
     hour = ((data[5] << 8) + data[4]) * 25.4 / 100.0; /* mm */
     day = ((data[7] << 8) + data[6]) * 25.4 / 100.0; /* mm */
     total = ((data[9] << 8) + data[8]) * 25.4 / 100.0; /* mm */
@@ -367,7 +367,7 @@ void wmr_handle_temp(WMR *wmr, unsigned char *data, int len){
 
     temp = (data[3] + ((data[4] & 0x0f) << 8)) / 10.0;
     if ((data[4] >> 4) == 0x8) temp = -temp;
-    
+
     humidity = data[5];
 
     dewpoint = (data[6] + ((data[7] & 0x0f) << 8)) / 10.0;
@@ -444,7 +444,7 @@ void wmr_handle_wind(WMR *wmr, unsigned char *data, int len){
 
     wind_dir = data[2] & 0xf;
     power = data[2] >> 4;
-    
+
     wind_speed = data[4] / 10.0;
 
     low_speed = data[5] >> 4;
@@ -497,9 +497,9 @@ void wmr_handle_clock(WMR *wmr, unsigned char *data, int len){
  ****************************/
 
 void wmr_handle_packet(WMR *wmr, unsigned char *data, int len) {
-    if (gOutputStdout)
-        dump_packet(data, len);
-    
+    /* if (gOutputStdout)
+        dump_packet(data, len); */
+
     switch(data[1]) {
     case 0x41:
         wmr_handle_rain(wmr, data, len);
@@ -522,7 +522,7 @@ void wmr_handle_packet(WMR *wmr, unsigned char *data, int len) {
     case 0x60:
         wmr_handle_clock(wmr, data, len);
         break;
-    }    
+    }
 }
 
 void wmr_read_data(WMR *wmr) {
@@ -570,7 +570,7 @@ void wmr_read_data(WMR *wmr) {
         data_len = 12;
         break;
     default:
-        printf("Unknown packet type: %02x, skipping\n", type);
+        fprintf(stderr, "Unknown packet type: %02x, skipping\n", type);
     }
 
     if (data_len > 0) {
@@ -599,13 +599,13 @@ void wmr_process(WMR *wmr) {
 }
 
 void cleanup(int sig_num) {
-    printf("Caught signal, cleaning up\n");
+    fprintf(stderr, "Caught signal, cleaning up\n");
 
     if (gOutputZmq) {
         zmq_close(wmr->zmq_sock);
         zmq_term(wmr->zmq_ctx);
     }
-    
+
     if (wmr != NULL) {
         wmr_close(wmr);
         wmr = NULL;
@@ -647,7 +647,7 @@ int main(int argc, char* argv[]) {
                 "\t-f: output to file only\n"
                 "\t-z endpoint (eg. tcp://*:8790): output to zmq endpoint\n");
             return 1;
-        case 's': 
+        case 's':
             gOutputStdout = true;
             break;
         case 'f':
@@ -668,7 +668,7 @@ int main(int argc, char* argv[]) {
     if (!(gOutputStdout || gOutputFile || gOutputZmq)) {
         /* set default outputs */
         gOutputStdout = true;
-        gOutputFile = true;        
+        gOutputFile = true;
     }
 
     /* Initialize WMR */
@@ -688,18 +688,18 @@ int main(int argc, char* argv[]) {
         init_output_zmq(wmr);
     }
 
-    printf("Opening WMR100...\n");
+    fprintf(stderr, "Opening WMR100...\n");
     ret = wmr_init(wmr);
     if (ret != 0) {
         perror("Failed to init USB device, exiting.");
         exit(1);
     }
 
-    printf("Found on USB: %s\n", wmr->hid->id);
+    fprintf(stderr, "Found on USB: %s\n", wmr->hid->id);
     wmr_print_state(wmr);
     wmr_process(wmr);
     wmr_close(wmr);
-    printf("Closed WMR100\n");
-  
+    fprintf(stderr, "Closed WMR100\n");
+
     return 0;
 }
