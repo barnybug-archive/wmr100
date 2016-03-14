@@ -23,7 +23,6 @@ a JSON format, easy for parsing/analysing.
 You can output to:
 - stdout
 - a file
-- a zeromq socket
 
 You'll need to setup the udev rules (see udev/README) if you want to run this
 not as root. This is due to how libhid accesses the USB ports.
@@ -35,7 +34,6 @@ Packages:
 - libhid-dev
 - pkg-config
 - libusb-dev
-- libzmq-dev
 
 Building
 --------
@@ -70,6 +68,3 @@ Run:
 This will dump data to data.log as well as stdout.q as stdout. You can then
 process periodically data.log with a script in python/perl/ruby/your language of
 choice, and frob with the data that way.
-
-Or publish to a zeromq socket:
-    ./wmr100 -z 'tcp://*:8790'

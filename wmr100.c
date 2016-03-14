@@ -24,7 +24,6 @@
 #include <time.h>
 #include <unistd.h>
 #include <ctype.h>
-#include <zmq.h>
 #include <sys/time.h>
 #include <assert.h>
 
@@ -39,7 +38,6 @@
 
 bool gOutputStdout = false;
 bool gOutputFile = false;
-char *gOutputZmq = NULL;
 
 /* Constants */
 
@@ -67,8 +65,6 @@ typedef struct _WMR {
     HIDInterface *hid;
     FILE *data_fh;
     char *data_filename;
-    void *zmq_ctx;
-    void *zmq_sock;
 } WMR;
 
 WMR *wmr = NULL;
@@ -270,19 +266,6 @@ void wmr_output_stdout(WMR *wmr, char *msg) {
     fflush(stdout);
 }
 
-void wmr_output_zmq(WMR *wmr, char *topic, char *msg) {
-    int len = strlen(topic) + 1 + strlen(msg);
-    void *buf = malloc(len);
-    char *data = (char *)buf;
-
-    /* message format is: topic\0json, for pubsub subscription matching */
-    strcpy(data, topic);
-    data += strlen(topic) + 1;
-    memcpy(data, msg, strlen(msg));
-    zmq_send(wmr->zmq_sock, buf, len, 0);
-    free(buf);
-}
-
 void wmr_log_data(WMR *wmr, char *topic, char *msg) {
     char timestamp[200];
     char *buf;
@@ -307,9 +290,6 @@ void wmr_log_data(WMR *wmr, char *topic, char *msg) {
     }
     if (gOutputStdout) {
         wmr_output_stdout(wmr, buf);
-    }
-    if (gOutputZmq) {
-        wmr_output_zmq(wmr, topic, buf);
     }
 
     free(buf);
@@ -601,11 +581,6 @@ void wmr_process(WMR *wmr) {
 void cleanup(int sig_num) {
     fprintf(stderr, "Caught signal, cleaning up\n");
 
-    if (gOutputZmq) {
-        zmq_close(wmr->zmq_sock);
-        zmq_term(wmr->zmq_ctx);
-    }
-
     if (wmr != NULL) {
         wmr_close(wmr);
         wmr = NULL;
@@ -618,17 +593,6 @@ void cleanup(int sig_num) {
  Main
  ****************************/
 
-int init_output_zmq(WMR *wmr) {
-    wmr->zmq_ctx = zmq_init(1);
-    assert(wmr->zmq_ctx != NULL);
-    wmr->zmq_sock = zmq_socket(wmr->zmq_ctx, ZMQ_PUB);
-    assert(wmr->zmq_sock != NULL);
-    assert(gOutputZmq);
-    zmq_connect(wmr->zmq_sock, gOutputZmq);
-
-    return 0;
-}
-
 int main(int argc, char* argv[]) {
     int ret;
     int c;
@@ -637,24 +601,20 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, cleanup);
 
     /* Parse the command line parameters */
-    while ((c = getopt(argc, argv, "hsfdz:")) != -1)
+    while ((c = getopt(argc, argv, "hsfd:")) != -1)
     {
         switch (c)
         {
         case 'h':
             fprintf(stderr, "Options:\n"
                 "\t-s: output to sdtout only\n"
-                "\t-f: output to file only\n"
-                "\t-z endpoint (eg. tcp://*:8790): output to zmq endpoint\n");
+                "\t-f: output to file only\n");
             return 1;
         case 's':
             gOutputStdout = true;
             break;
         case 'f':
             gOutputFile = true;
-            break;
-        case 'z':
-            gOutputZmq = optarg; /* zeromq endpoint */
             break;
         case '?':
             if (isprint(optopt))
@@ -665,7 +625,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (!(gOutputStdout || gOutputFile || gOutputZmq)) {
+    if (!(gOutputStdout || gOutputFile)) {
         /* set default outputs */
         gOutputStdout = true;
         gOutputFile = true;
@@ -683,10 +643,6 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "- Stdout\n");
     if (gOutputFile)
         fprintf(stderr, "- File\n");
-    if (gOutputZmq) {
-        fprintf(stderr, "- Zmq\n");
-        init_output_zmq(wmr);
-    }
 
     fprintf(stderr, "Opening WMR100...\n");
     ret = wmr_init(wmr);
